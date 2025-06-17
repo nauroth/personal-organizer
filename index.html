@@ -1,125 +1,4 @@
-        // Conflict Resolution
-        function showConflictResolution(data) {
-            const modal = document.getElementById('conflictModal');
-            const versionsContainer = document.getElementById('conflictVersions');
-            
-            const localVersion = {
-                id: 'local',
-                title: 'Local Version',
-                device: 'This Device',
-                timestamp: localStorage.getItem('lastSyncTime') || new Date().toISOString(),
-                data: data.local
-            };
-            
-            const cloudVersion = {
-                id: 'cloud',
-                title: 'Cloud Version',
-                device: data.cloud.metadata.device || 'Another Device',
-                timestamp: data.cloud.metadata.lastModified,
-                data: data.cloud
-            };
-            
-            // Store data globally for access in selectConflictVersion
-            window.conflictLocalData = localVersion.data;
-            window.conflictCloudData = cloudVersion.data;
-            
-            versionsContainer.innerHTML = `
-                <div class="conflict-version" onclick="selectConflictVersion('local')">
-                    <div class="conflict-version-header">${localVersion.title}</div>
-                    <div class="conflict-version-meta">
-                        Device: ${localVersion.device}<br>
-                        Last modified: ${formatDateTime(localVersion.timestamp)}
-                    </div>
-                    <div class="conflict-version-content">
-                        Tasks: ${localVersion.data.tasks.length}<br>
-                        Events: ${localVersion.data.events.length}<br>
-                        Groceries: ${localVersion.data.groceries.length}
-                    </div>
-                </div>
-                <div class="conflict-version" onclick="selectConflictVersion('cloud')">
-                    <div class="conflict-version-header">${cloudVersion.title}</div>
-                    <div class="conflict-version-meta">
-                        Device: ${cloudVersion.device}<br>
-                        Last modified: ${formatDateTime(cloudVersion.timestamp)}
-                    </div>
-                    <div class="conflict-version-content">
-                        Tasks: ${cloudVersion.data.tasks.length}<br>
-                        Events: ${cloudVersion.data.events.length}<br>
-                        Groceries: ${cloudVersion.data.groceries.length}
-                    </div>
-                </div>
-            `;
-            
-            window.conflictData = { local: localVersion.data, cloud: cloudVersion.data };
-            modal.classList.add('show');
-        }
-        
-        function selectConflictVersion(version) {
-            selectedConflictVersion = version;
-            document.querySelectorAll('.conflict-version').forEach(el => {
-                el.classList.remove('selected');
-            });
-            event.currentTarget.classList.add('selected');
-        }
-        
-        async function resolveConflict() {
-            if (!selectedConflictVersion) {
-                alert('Please select a version to keep');
-                return;
-            }
-            
-            const dataToUse = window.conflictData[selectedConflictVersion];
-            
-            // Apply the selected version
-            tasks = dataToUse.tasks;
-            events = dataToUse.events;
-            groceries = dataToUse.groceries;
-            
-            // Save locally
-            saveToLocal();
-            
-            // Upload to OneDrive
-            const metadata = {
-                lastModified: new Date().toISOString(),
-                device: navigator.userAgent.substring(0, 50)
-            };
-            
-            try {
-                await Promise.all([
-                    writeToOneDrive('tasks.json', tasks),
-                    writeToOneDrive('events.json', events),
-                    writeToOneDrive('groceries.json', groceries),
-                    writeToOneDrive('metadata.json', metadata)
-                ]);
-                
-                localStorage.setItem('lastSyncTime', metadata.lastModified);
-                updateSyncStatus('synced', 'Synced');
-            } catch (error) {
-                console.error('Error resolving conflict:', error);
-                updateSyncStatus('error', 'Sync failed');
-            }
-            
-            // Update UI
-            renderTasks();
-            updateStats();
-            renderCalendar();
-            renderGroceries();
-            
-            closeConflictModal();
-        }
-        
-        function cancelConflictResolution() {
-            closeConflictModal();
-            updateSyncStatus('error', 'Sync cancelled');
-        }
-        
-        function closeConflictModal() {
-            document.getElementById('conflictModal').classList.remove('show');
-            selectedConflictVersion = null;
-            window.conflictData = null;
-        }
-        
-        // Local Storage Functions<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1331,7 +1210,7 @@
         // Microsoft Authentication Configuration
         const msalConfig = {
             auth: {
-                clientId: 'YOUR_CLIENT_ID_HERE', // Replace with your app's client ID from Azure
+                clientId: '427fd9fd-4cba-4121-9a5c-3f11318c2494', // Replace with your app's client ID from Azure
                 authority: 'https://login.microsoftonline.com/consumers', // For personal accounts
                 redirectUri: window.location.origin // Current page URL
             },
@@ -1571,30 +1450,29 @@
         }
         
         // Conflict Resolution
-        function showConflictResolution(dataType) {
+        function showConflictResolution(data) {
             const modal = document.getElementById('conflictModal');
             const versionsContainer = document.getElementById('conflictVersions');
             
-            // Create mock conflict data
             const localVersion = {
                 id: 'local',
                 title: 'Local Version',
                 device: 'This Device',
-                timestamp: new Date().toISOString(),
-                data: JSON.stringify({ tasks, events, groceries }, null, 2)
+                timestamp: localStorage.getItem('lastSyncTime') || new Date().toISOString(),
+                data: data.local
             };
             
             const cloudVersion = {
                 id: 'cloud',
                 title: 'Cloud Version',
-                device: 'Another Device',
-                timestamp: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
-                data: JSON.stringify({
-                    tasks: [...tasks, { id: 999, title: 'Cloud Task', completed: false }],
-                    events,
-                    groceries
-                }, null, 2)
+                device: data.cloud.metadata.device || 'Another Device',
+                timestamp: data.cloud.metadata.lastModified,
+                data: data.cloud
             };
+            
+            // Store data globally for access in selectConflictVersion
+            window.conflictLocalData = localVersion.data;
+            window.conflictCloudData = cloudVersion.data;
             
             versionsContainer.innerHTML = `
                 <div class="conflict-version" onclick="selectConflictVersion('local')">
@@ -1604,7 +1482,9 @@
                         Last modified: ${formatDateTime(localVersion.timestamp)}
                     </div>
                     <div class="conflict-version-content">
-                        <pre>${localVersion.data.substring(0, 200)}...</pre>
+                        Tasks: ${localVersion.data.tasks.length}<br>
+                        Events: ${localVersion.data.events.length}<br>
+                        Groceries: ${localVersion.data.groceries.length}
                     </div>
                 </div>
                 <div class="conflict-version" onclick="selectConflictVersion('cloud')">
@@ -1614,11 +1494,14 @@
                         Last modified: ${formatDateTime(cloudVersion.timestamp)}
                     </div>
                     <div class="conflict-version-content">
-                        <pre>${cloudVersion.data.substring(0, 200)}...</pre>
+                        Tasks: ${cloudVersion.data.tasks.length}<br>
+                        Events: ${cloudVersion.data.events.length}<br>
+                        Groceries: ${cloudVersion.data.groceries.length}
                     </div>
                 </div>
             `;
             
+            window.conflictData = { local: localVersion.data, cloud: cloudVersion.data };
             modal.classList.add('show');
         }
         
@@ -1630,17 +1513,50 @@
             event.currentTarget.classList.add('selected');
         }
         
-        function resolveConflict() {
+        async function resolveConflict() {
             if (!selectedConflictVersion) {
                 alert('Please select a version to keep');
                 return;
             }
             
-            // In production, apply the selected version
-            console.log('Resolved conflict with:', selectedConflictVersion);
+            const dataToUse = window.conflictData[selectedConflictVersion];
+            
+            // Apply the selected version
+            tasks = dataToUse.tasks;
+            events = dataToUse.events;
+            groceries = dataToUse.groceries;
+            
+            // Save locally
+            saveToLocal();
+            
+            // Upload to OneDrive
+            const metadata = {
+                lastModified: new Date().toISOString(),
+                device: navigator.userAgent.substring(0, 50)
+            };
+            
+            try {
+                await Promise.all([
+                    writeToOneDrive('tasks.json', tasks),
+                    writeToOneDrive('events.json', events),
+                    writeToOneDrive('groceries.json', groceries),
+                    writeToOneDrive('metadata.json', metadata)
+                ]);
+                
+                localStorage.setItem('lastSyncTime', metadata.lastModified);
+                updateSyncStatus('synced', 'Synced');
+            } catch (error) {
+                console.error('Error resolving conflict:', error);
+                updateSyncStatus('error', 'Sync failed');
+            }
+            
+            // Update UI
+            renderTasks();
+            updateStats();
+            renderCalendar();
+            renderGroceries();
             
             closeConflictModal();
-            updateSyncStatus('synced', 'Synced');
         }
         
         function cancelConflictResolution() {
@@ -1651,6 +1567,7 @@
         function closeConflictModal() {
             document.getElementById('conflictModal').classList.remove('show');
             selectedConflictVersion = null;
+            window.conflictData = null;
         }
         
         // Local Storage Functions
