@@ -26,6 +26,7 @@
             border-radius: 20px;
             padding: 20px;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            position: relative;
         }
         
         /* Navigation Tabs */
@@ -459,7 +460,7 @@
             white-space: nowrap;
         }
         
-        /* Calendar Event Colors */
+        /* Calendar Event Colors - Fixed according to TODO_1 */
         .calendar-event.home { background: #3498db; color: white; }
         .calendar-event.leisure { background: #9b59b6; color: white; }
         .calendar-event.gr-yaris { background: #f39c12; color: white; }
@@ -554,9 +555,9 @@
         
         /* Login Button */
         .login-btn {
-            position: absolute;
-            top: 10px;
-            right: 10px;
+            position: fixed;
+            top: 20px;
+            right: 20px;
             background: white;
             border: 2px solid #667eea;
             color: #667eea;
@@ -566,6 +567,7 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
+            z-index: 999;
         }
         
         .login-btn:hover {
@@ -575,14 +577,18 @@
         
         /* Sync Status */
         .sync-status {
-            position: absolute;
-            top: 10px;
-            left: 10px;
+            position: fixed;
+            top: 20px;
+            left: 20px;
             display: flex;
             align-items: center;
             gap: 5px;
             font-size: 11px;
             color: #7f8c8d;
+            background: white;
+            padding: 8px 12px;
+            border-radius: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }
         
         .sync-indicator {
@@ -676,15 +682,17 @@
             }
             
             .login-btn {
-                position: static;
-                margin-bottom: 10px;
-                width: 100%;
+                top: 10px;
+                right: 10px;
+                padding: 6px 12px;
+                font-size: 11px;
             }
             
             .sync-status {
-                position: static;
-                margin-bottom: 10px;
-                justify-content: center;
+                top: 10px;
+                left: 10px;
+                padding: 6px 10px;
+                font-size: 10px;
             }
         }
         
@@ -765,22 +773,12 @@
                 transform: translateY(0);
             }
         }
-        
-        /* Date picker custom styles */
-        input[type="date"]::-webkit-calendar-picker-indicator {
-            cursor: pointer;
-            border-radius: 4px;
-            padding: 2px;
-        }
-        
-        input[type="date"]::-webkit-calendar-picker-indicator:hover {
-            background-color: rgba(102, 126, 234, 0.1);
-        }
     </style>
+    <script src="https://unpkg.com/@azure/msal-browser@2.38.0/lib/msal-browser.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <div class="sync-status" id="syncStatus">
+        <div class="sync-status" id="syncStatus" style="display: none;">
             <span class="sync-indicator" id="syncIndicator"></span>
             <span id="syncText">Offline</span>
         </div>
@@ -919,6 +917,7 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" onclick="closeAddModal()">Cancel</button>
                 <button type="submit" form="addForm" class="btn">Add</button>
+                <button type="button" class="btn btn-success" onclick="addAndContinue()">Add & Continue</button>
             </div>
         </div>
     </div>
@@ -957,7 +956,6 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@microsoft/microsoft-graph-client/lib/graph-js-sdk.js"></script>
     <script>
         // Global Variables
         let tasks = [];
@@ -973,25 +971,64 @@
         let accessToken = null;
         let lastSyncTime = null;
         let syncInterval = null;
+        let msalInstance = null;
+        let graphClient = null;
+        let lastUsedCategories = {
+            task: 'home',
+            event: 'home',
+            grocery: ''
+        };
+        let isModifying = false;
+        let modifyingItemId = null;
         
         // Microsoft Graph Configuration
         const msalConfig = {
             auth: {
-                clientId: '427fd9fd-4cba-4121-9a5c-3f11318c2494', // Replace with your app's client ID from Azure
-                authority: 'https://login.microsoftonline.com/consumers', // For personal accounts
-                redirectUri: 'https://nauroth.github.io/personal-organizer/' // Github page URL
+                clientId: '427fd9fd-4cba-4121-9a5c-3f11318c2494',
+                authority: 'https://login.microsoftonline.com/consumers',
+                redirectUri: 'https://nauroth.github.io/personal-organizer/'
             },
+            cache: {
+                cacheLocation: 'sessionStorage',
+                storeAuthStateInCookie: false
+            }
         };
         
-        const msalScopes = ['Files.ReadWrite', 'User.Read'];
+        const loginRequest = {
+            scopes: ['Files.ReadWrite', 'User.Read']
+        };
+        
+        // Initialize MSAL
+        async function initializeMsal() {
+            try {
+                msalInstance = new msal.PublicClientApplication(msalConfig);
+                await msalInstance.initialize();
+                
+                // Handle redirect promise
+                const response = await msalInstance.handleRedirectPromise();
+                if (response) {
+                    handleLoginResponse(response);
+                } else {
+                    // Check if user is already signed in
+                    const accounts = msalInstance.getAllAccounts();
+                    if (accounts.length > 0) {
+                        isAuthenticated = true;
+                        updateAuthUI();
+                        getTokenSilently();
+                    }
+                }
+            } catch (error) {
+                console.error('MSAL initialization error:', error);
+            }
+        }
         
         // Initialize
-        function init() {
+        async function init() {
+            await initializeMsal();
             loadFromLocalStorage();
             renderCurrentTab();
             updateStats();
             setupEventListeners();
-            checkAuthentication();
         }
         
         // Date Formatting Functions
@@ -1004,11 +1041,14 @@
             return `${day}/${month}/${year}`;
         }
         
-        function parseDisplayDate(dateString) {
-            if (!dateString) return '';
-            const parts = dateString.split('/');
-            if (parts.length !== 3) return dateString;
-            return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+        function formatDateForInput(date) {
+            if (!date) return '';
+            if (typeof date === 'string' && date.includes('-')) return date;
+            const d = new Date(date);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
         }
         
         // Tab Switching
@@ -1047,30 +1087,41 @@
         }
         
         // Add Modal
-        function openAddModal() {
+        function openAddModal(preselectedDate = null) {
             const modal = document.getElementById('addModal');
             const form = document.getElementById('addForm');
             const title = document.getElementById('addModalTitle');
+            const submitBtn = form.parentElement.parentElement.querySelector('.btn:not(.btn-secondary):not(.btn-success)');
             
-            // Clear form
+            // Reset form
             form.innerHTML = '';
+            isModifying = false;
+            modifyingItemId = null;
             
             switch(activeTab) {
                 case 'tasks':
                     title.textContent = 'Add New Task';
                     form.innerHTML = getTaskFormHTML();
+                    // Set last used category
+                    document.getElementById('taskCategory').value = lastUsedCategories.task;
                     break;
                 case 'calendar':
                     title.textContent = 'Add Calendar Event';
                     form.innerHTML = getEventFormHTML();
-                    setupEventFormHandlers();
+                    setupEventFormHandlers(preselectedDate);
+                    // Set last used category
+                    document.getElementById('eventMainCategory').value = lastUsedCategories.event;
+                    handleMainCategoryChange();
                     break;
                 case 'groceries':
                     title.textContent = 'Add Grocery Item';
                     form.innerHTML = getGroceryFormHTML();
+                    // Set last used category
+                    document.getElementById('groceryCategory').value = lastUsedCategories.grocery;
                     break;
             }
             
+            submitBtn.textContent = 'Add';
             modal.style.display = 'block';
         }
         
@@ -1103,7 +1154,7 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="taskDueDate">Due Date</label>
-                        <input type="date" id="taskDueDate">
+                        <input type="text" id="taskDueDate" placeholder="DD/MM/YYYY" pattern="\\d{2}/\\d{2}/\\d{4}">
                     </div>
                     <div class="form-group">
                         <label for="taskPriority">Priority</label>
@@ -1132,7 +1183,7 @@
                 <div class="form-row-3">
                     <div class="form-group">
                         <label for="eventDate">Date</label>
-                        <input type="date" id="eventDate" required>
+                        <input type="text" id="eventDate" required placeholder="DD/MM/YYYY" pattern="\\d{2}/\\d{2}/\\d{4}">
                     </div>
                     <div class="form-group">
                         <label for="eventHour">Hour</label>
@@ -1144,6 +1195,7 @@
                     <div class="form-group">
                         <label for="eventMinute">Minutes</label>
                         <select id="eventMinute">
+                            <option value="">No time</option>
                             <option value="00">00</option>
                             <option value="15">15</option>
                             <option value="30">30</option>
@@ -1212,12 +1264,28 @@
             `;
         }
         
-        function setupEventFormHandlers() {
-            // Set default values
+        function setupEventFormHandlers(preselectedDate = null) {
+            // Set default or preselected date
             const eventDate = document.getElementById('eventDate');
             if (eventDate) {
-                eventDate.valueAsDate = new Date();
+                if (preselectedDate) {
+                    eventDate.value = formatDateForDisplay(preselectedDate);
+                } else {
+                    eventDate.value = formatDateForDisplay(new Date());
+                }
             }
+            
+            // Set up date input handler
+            eventDate.addEventListener('input', function(e) {
+                let value = e.target.value.replace(/\D/g, '');
+                if (value.length >= 2) {
+                    value = value.slice(0, 2) + '/' + value.slice(2);
+                }
+                if (value.length >= 5) {
+                    value = value.slice(0, 5) + '/' + value.slice(5, 9);
+                }
+                e.target.value = value;
+            });
         }
         
         function handleMainCategoryChange() {
@@ -1228,8 +1296,13 @@
             const recurrenceSelect = document.getElementById('eventRecurrence');
             const titleInput = document.getElementById('eventTitle');
             
+            // Save last used category
+            lastUsedCategories.event = mainCategory;
+            
             // Reset title when changing category
-            titleInput.value = '';
+            if (!isModifying) {
+                titleInput.value = '';
+            }
             
             // Hide all sections first
             subcategorySection.style.display = 'none';
@@ -1274,8 +1347,8 @@
             const recurrenceSection = document.getElementById('recurrenceSection');
             const recurrenceSelect = document.getElementById('eventRecurrence');
             
-            // Auto-populate title
-            if (subcategory) {
+            // Auto-populate title only if not modifying
+            if (subcategory && !isModifying) {
                 const categoryNames = {
                     'gr-yaris': 'GR Yaris',
                     'street-triple': 'Street Triple',
@@ -1298,7 +1371,7 @@
                 if (categoryNames[mainCategory] && subcategoryNames[subcategory]) {
                     titleInput.value = `${categoryNames[mainCategory]} - ${subcategoryNames[subcategory]}`;
                 }
-            } else {
+            } else if (!subcategory && !isModifying) {
                 titleInput.value = '';
             }
             
@@ -1333,25 +1406,66 @@
         // Form Submission
         function setupEventListeners() {
             document.getElementById('addForm').addEventListener('submit', handleAddFormSubmit);
+            
+            // Add date input handler for task due date
+            const taskDueDateInput = document.querySelector('#taskDueDate');
+            if (taskDueDateInput) {
+                taskDueDateInput.addEventListener('input', function(e) {
+                    let value = e.target.value.replace(/\D/g, '');
+                    if (value.length >= 2) {
+                        value = value.slice(0, 2) + '/' + value.slice(2);
+                    }
+                    if (value.length >= 5) {
+                        value = value.slice(0, 5) + '/' + value.slice(5, 9);
+                    }
+                    e.target.value = value;
+                });
+            }
         }
         
         function handleAddFormSubmit(e) {
             e.preventDefault();
             
-            switch(activeTab) {
-                case 'tasks':
-                    addTask();
-                    break;
-                case 'calendar':
-                    addEvent();
-                    break;
-                case 'groceries':
-                    addGrocery();
-                    break;
+            if (isModifying) {
+                switch(activeTab) {
+                    case 'tasks':
+                        updateTask(modifyingItemId);
+                        break;
+                    case 'calendar':
+                        updateEvent(modifyingItemId);
+                        break;
+                }
+            } else {
+                switch(activeTab) {
+                    case 'tasks':
+                        addTask();
+                        break;
+                    case 'calendar':
+                        addEvent();
+                        break;
+                    case 'groceries':
+                        addGrocery();
+                        break;
+                }
             }
             
             closeAddModal();
             syncToCloud();
+        }
+        
+        function addAndContinue() {
+            const form = document.getElementById('addForm');
+            if (form.checkValidity()) {
+                // Submit the form
+                handleAddFormSubmit(new Event('submit', { cancelable: true }));
+                
+                // Re-open the modal
+                setTimeout(() => {
+                    openAddModal();
+                }, 100);
+            } else {
+                form.reportValidity();
+            }
         }
         
         // Task Functions
@@ -1359,8 +1473,19 @@
             const title = document.getElementById('taskTitle').value.trim();
             const description = document.getElementById('taskDescription').value.trim();
             const category = document.getElementById('taskCategory').value;
-            const dueDate = document.getElementById('taskDueDate').value;
+            let dueDate = document.getElementById('taskDueDate').value.trim();
             const priority = document.getElementById('taskPriority').value;
+            
+            // Save last used category
+            lastUsedCategories.task = category;
+            
+            // Convert DD/MM/YYYY to YYYY-MM-DD for storage
+            if (dueDate && dueDate.includes('/')) {
+                const parts = dueDate.split('/');
+                if (parts.length === 3) {
+                    dueDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                }
+            }
             
             if (!title) return;
             
@@ -1518,16 +1643,27 @@
         function addEvent() {
             const title = document.getElementById('eventTitle').value.trim();
             const description = document.getElementById('eventDescription').value.trim();
-            const date = document.getElementById('eventDate').value;
+            let date = document.getElementById('eventDate').value.trim();
             const hour = document.getElementById('eventHour').value;
             const minute = document.getElementById('eventMinute').value;
             const mainCategory = document.getElementById('eventMainCategory').value;
             const subcategory = document.getElementById('eventSubcategory').value;
             const recurrence = document.getElementById('eventRecurrence') ? document.getElementById('eventRecurrence').value : 'none';
             
+            // Save last used category
+            lastUsedCategories.event = mainCategory;
+            
+            // Convert DD/MM/YYYY to YYYY-MM-DD for storage
+            if (date && date.includes('/')) {
+                const parts = date.split('/');
+                if (parts.length === 3) {
+                    date = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                }
+            }
+            
             if (!title || !date) return;
             
-            const time = hour ? `${hour}:${minute}` : '';
+            const time = hour ? `${hour}:${minute || '00'}` : '';
             let category = mainCategory;
             if (subcategory) {
                 category = `${mainCategory}-${subcategory}`;
@@ -1642,7 +1778,7 @@
                     </div>`;
                 });
                 
-                calendarHTML += `<div class="calendar-day ${isToday ? 'today' : ''}">
+                calendarHTML += `<div class="calendar-day ${isToday ? 'today' : ''}" ondblclick="openAddModalForDate('${dateString}')">
                     <div class="calendar-day-number">${day}</div>
                     ${eventsHTML}
                 </div>`;
@@ -1658,6 +1794,39 @@
             }
             
             document.getElementById('calendarGrid').innerHTML = calendarHTML;
+            
+            // Add touch support for mobile
+            if ('ontouchstart' in window) {
+                let touchStartTime;
+                let touchStartTarget;
+                
+                document.querySelectorAll('.calendar-day').forEach(day => {
+                    day.addEventListener('touchstart', function(e) {
+                        touchStartTime = new Date().getTime();
+                        touchStartTarget = e.currentTarget;
+                    });
+                    
+                    day.addEventListener('touchend', function(e) {
+                        const touchEndTime = new Date().getTime();
+                        const touchDuration = touchEndTime - touchStartTime;
+                        
+                        if (touchDuration > 500 && touchStartTarget === e.currentTarget) {
+                            const dateStr = e.currentTarget.getAttribute('ondblclick');
+                            if (dateStr) {
+                                const match = dateStr.match(/openAddModalForDate\('(.+)'\)/);
+                                if (match) {
+                                    openAddModalForDate(match[1]);
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+        }
+        
+        function openAddModalForDate(dateString) {
+            switchTab('calendar');
+            openAddModal(dateString);
         }
         
         function getEventClass(category) {
@@ -1716,6 +1885,9 @@
         function addGrocery() {
             const item = document.getElementById('groceryItem').value.trim();
             const category = document.getElementById('groceryCategory').value;
+            
+            // Save last used category
+            lastUsedCategories.grocery = category;
             
             if (!item) return;
             
@@ -1944,6 +2116,10 @@
             // Close details modal
             closeDetailsModal();
             
+            // Set modifying flags
+            isModifying = true;
+            modifyingItemId = currentDetailItem.id;
+            
             // Open add modal with pre-filled data
             openAddModal();
             
@@ -1952,25 +2128,24 @@
                 document.getElementById('taskTitle').value = currentDetailItem.title;
                 document.getElementById('taskDescription').value = currentDetailItem.description || '';
                 document.getElementById('taskCategory').value = currentDetailItem.category;
-                document.getElementById('taskDueDate').value = currentDetailItem.dueDate || '';
+                document.getElementById('taskDueDate').value = currentDetailItem.dueDate ? formatDateForDisplay(currentDetailItem.dueDate) : '';
                 document.getElementById('taskPriority').value = currentDetailItem.priority;
                 
-                // Change form submission to update instead of add
-                const form = document.getElementById('addForm');
-                form.onsubmit = (e) => {
-                    e.preventDefault();
-                    updateTask(currentDetailItem.id);
-                    closeAddModal();
-                };
+                // Change submit button text
+                const submitBtn = document.querySelector('#addModal .btn:not(.btn-secondary):not(.btn-success)');
+                submitBtn.textContent = 'Update';
             } else if (currentDetailType === 'event') {
                 document.getElementById('eventTitle').value = currentDetailItem.title;
                 document.getElementById('eventDescription').value = currentDetailItem.description || '';
-                document.getElementById('eventDate').value = currentDetailItem.date;
+                document.getElementById('eventDate').value = formatDateForDisplay(currentDetailItem.date);
                 
                 if (currentDetailItem.time) {
                     const [hour, minute] = currentDetailItem.time.split(':');
                     document.getElementById('eventHour').value = hour;
-                    document.getElementById('eventMinute').value = minute;
+                    document.getElementById('eventMinute').value = minute || '00';
+                } else {
+                    document.getElementById('eventHour').value = '';
+                    document.getElementById('eventMinute').value = '';
                 }
                 
                 document.getElementById('eventMainCategory').value = currentDetailItem.mainCategory;
@@ -1983,13 +2158,9 @@
                     }, 100);
                 }
                 
-                // Change form submission to update instead of add
-                const form = document.getElementById('addForm');
-                form.onsubmit = (e) => {
-                    e.preventDefault();
-                    updateEvent(currentDetailItem.id);
-                    closeAddModal();
-                };
+                // Change submit button text
+                const submitBtn = document.querySelector('#addModal .btn:not(.btn-secondary):not(.btn-success)');
+                submitBtn.textContent = 'Update';
             }
         }
         
@@ -2000,7 +2171,17 @@
             task.title = document.getElementById('taskTitle').value.trim();
             task.description = document.getElementById('taskDescription').value.trim();
             task.category = document.getElementById('taskCategory').value;
-            task.dueDate = document.getElementById('taskDueDate').value;
+            
+            let dueDate = document.getElementById('taskDueDate').value.trim();
+            // Convert DD/MM/YYYY to YYYY-MM-DD for storage
+            if (dueDate && dueDate.includes('/')) {
+                const parts = dueDate.split('/');
+                if (parts.length === 3) {
+                    dueDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                }
+            }
+            task.dueDate = dueDate;
+            
             task.priority = document.getElementById('taskPriority').value;
             task.lastModified = new Date().toISOString();
             
@@ -2017,11 +2198,20 @@
             
             event.title = document.getElementById('eventTitle').value.trim();
             event.description = document.getElementById('eventDescription').value.trim();
-            event.date = document.getElementById('eventDate').value;
+            
+            let date = document.getElementById('eventDate').value.trim();
+            // Convert DD/MM/YYYY to YYYY-MM-DD for storage
+            if (date && date.includes('/')) {
+                const parts = date.split('/');
+                if (parts.length === 3) {
+                    date = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                }
+            }
+            event.date = date;
             
             const hour = document.getElementById('eventHour').value;
             const minute = document.getElementById('eventMinute').value;
-            event.time = hour ? `${hour}:${minute}` : '';
+            event.time = hour ? `${hour}:${minute || '00'}` : '';
             
             event.mainCategory = document.getElementById('eventMainCategory').value;
             event.subcategory = document.getElementById('eventSubcategory').value;
@@ -2066,6 +2256,12 @@
             events = JSON.parse(localStorage.getItem('personalEvents')) || [];
             groceries = JSON.parse(localStorage.getItem('personalGroceries')) || [];
             lastSyncTime = localStorage.getItem('lastSyncTime');
+            
+            // Load last used categories
+            const savedCategories = localStorage.getItem('lastUsedCategories');
+            if (savedCategories) {
+                lastUsedCategories = JSON.parse(savedCategories);
+            }
         }
         
         function getDefaultTasks() {
@@ -2130,33 +2326,50 @@
         }
         
         // OneDrive Sync Functions
-        function checkAuthentication() {
-            // Check if we have a valid token
-            const urlParams = new URLSearchParams(window.location.hash.substring(1));
-            const token = urlParams.get('access_token');
-            
-            if (token) {
-                accessToken = token;
-                isAuthenticated = true;
-                updateAuthUI();
-                startSync();
-                // Clean up URL
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
-        }
-        
-        function handleLogin() {
+        async function handleLogin() {
             if (isAuthenticated) {
                 // Logout
+                await msalInstance.logoutPopup();
                 isAuthenticated = false;
                 accessToken = null;
                 stopSync();
                 updateAuthUI();
             } else {
-                // Login - In production, use proper OAuth flow
-                alert('Microsoft login would be implemented here with proper OAuth flow');
-                // For demo purposes:
-                // window.location.href = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${msalConfig.auth.clientId}&response_type=token&redirect_uri=${encodeURIComponent(msalConfig.auth.redirectUri)}&scope=${encodeURIComponent(msalScopes.join(' '))}`;
+                // Login
+                try {
+                    const response = await msalInstance.loginPopup(loginRequest);
+                    handleLoginResponse(response);
+                } catch (error) {
+                    console.error('Login error:', error);
+                    alert('Login failed. Please try again.');
+                }
+            }
+        }
+        
+        function handleLoginResponse(response) {
+            if (response && response.account) {
+                isAuthenticated = true;
+                updateAuthUI();
+                getTokenSilently();
+            }
+        }
+        
+        async function getTokenSilently() {
+            try {
+                const accounts = msalInstance.getAllAccounts();
+                if (accounts.length > 0) {
+                    const response = await msalInstance.acquireTokenSilent({
+                        ...loginRequest,
+                        account: accounts[0]
+                    });
+                    accessToken = response.accessToken;
+                    startSync();
+                }
+            } catch (error) {
+                console.error('Token acquisition error:', error);
+                // Token refresh failed, need to login again
+                isAuthenticated = false;
+                updateAuthUI();
             }
         }
         
@@ -2187,6 +2400,11 @@
                 if (!document.hidden) {
                     syncFromCloud();
                 }
+            });
+            
+            // Sync before page unload
+            window.addEventListener('beforeunload', () => {
+                syncToCloud();
             });
         }
         
@@ -2222,7 +2440,10 @@
         }
         
         async function syncToCloud() {
-            if (!isAuthenticated) return;
+            if (!isAuthenticated || !accessToken) return;
+            
+            // Save last used categories
+            localStorage.setItem('lastUsedCategories', JSON.stringify(lastUsedCategories));
             
             updateSyncStatus('syncing');
             
@@ -2232,46 +2453,148 @@
                     events,
                     groceries,
                     lastModified: new Date().toISOString(),
-                    version: '2.0'
+                    version: '3.0'
                 };
                 
-                // In production, use Microsoft Graph API to save to OneDrive
-                // For now, simulate success
-                setTimeout(() => {
+                const content = JSON.stringify(data, null, 2);
+                const blob = new Blob([content], { type: 'application/json' });
+                
+                // Upload to OneDrive
+                const uploadUrl = 'https://graph.microsoft.com/v1.0/me/drive/root:/Apps/PersonalOrganizer/data.json:/content';
+                
+                const response = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: blob
+                });
+                
+                if (response.ok) {
                     localStorage.setItem('lastSyncTime', new Date().toISOString());
                     updateSyncStatus('synced');
-                }, 1000);
+                } else {
+                    throw new Error(`Upload failed: ${response.status}`);
+                }
                 
             } catch (error) {
                 console.error('Sync error:', error);
                 updateSyncStatus('error');
+                
+                // If token expired, try to refresh
+                if (error.message.includes('401')) {
+                    getTokenSilently();
+                }
             }
         }
         
         async function syncFromCloud() {
-            if (!isAuthenticated) return;
+            if (!isAuthenticated || !accessToken) return;
             
             updateSyncStatus('syncing');
             
             try {
-                // In production, use Microsoft Graph API to fetch from OneDrive
-                // For now, check if local data is newer
-                const localLastModified = Math.max(
-                    ...tasks.map(t => new Date(t.lastModified || t.createdAt).getTime()),
-                    ...events.map(e => new Date(e.lastModified || e.createdAt).getTime()),
-                    ...groceries.map(g => new Date(g.lastModified || g.createdAt).getTime()),
-                    0
-                );
+                // Check if file exists
+                const checkUrl = 'https://graph.microsoft.com/v1.0/me/drive/root:/Apps/PersonalOrganizer/data.json';
+                const checkResponse = await fetch(checkUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
                 
-                // Simulate cloud check
-                setTimeout(() => {
+                if (!checkResponse.ok) {
+                    if (checkResponse.status === 404) {
+                        // File doesn't exist, create it
+                        await syncToCloud();
+                        return;
+                    }
+                    throw new Error(`Check failed: ${checkResponse.status}`);
+                }
+                
+                // Get file metadata
+                const metadata = await checkResponse.json();
+                const cloudLastModified = new Date(metadata.lastModifiedDateTime);
+                
+                // Get local last modified time
+                const localLastModified = getLocalLastModified();
+                
+                // Download file content
+                const downloadUrl = 'https://graph.microsoft.com/v1.0/me/drive/root:/Apps/PersonalOrganizer/data.json:/content';
+                const downloadResponse = await fetch(downloadUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                
+                if (!downloadResponse.ok) {
+                    throw new Error(`Download failed: ${downloadResponse.status}`);
+                }
+                
+                const cloudData = await downloadResponse.json();
+                
+                // Check for conflicts
+                if (localLastModified > cloudLastModified && hasLocalChanges()) {
+                    // Show conflict resolution dialog
+                    showConflictDialog(cloudData, cloudLastModified);
+                } else {
+                    // Apply cloud data
+                    applyCloudData(cloudData);
                     updateSyncStatus('synced');
-                }, 1000);
+                }
                 
             } catch (error) {
                 console.error('Sync error:', error);
                 updateSyncStatus('error');
+                
+                // If token expired, try to refresh
+                if (error.message.includes('401')) {
+                    getTokenSilently();
+                }
             }
+        }
+        
+        function getLocalLastModified() {
+            const allItems = [...tasks, ...events, ...groceries];
+            if (allItems.length === 0) return new Date(0);
+            
+            return new Date(Math.max(...allItems.map(item => 
+                new Date(item.lastModified || item.createdAt).getTime()
+            )));
+        }
+        
+        function hasLocalChanges() {
+            const lastSync = lastSyncTime ? new Date(lastSyncTime) : new Date(0);
+            return getLocalLastModified() > lastSync;
+        }
+        
+        function showConflictDialog(cloudData, cloudLastModified) {
+            const modal = document.getElementById('conflictModal');
+            const details = document.getElementById('conflictDetails');
+            
+            details.innerHTML = `
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div>
+                        <h4>Local Version</h4>
+                        <p>Last modified: ${formatDateForDisplay(getLocalLastModified())}</p>
+                        <p>Tasks: ${tasks.length}</p>
+                        <p>Events: ${events.length}</p>
+                        <p>Groceries: ${groceries.length}</p>
+                    </div>
+                    <div>
+                        <h4>Cloud Version</h4>
+                        <p>Last modified: ${formatDateForDisplay(cloudLastModified)}</p>
+                        <p>Tasks: ${cloudData.tasks?.length || 0}</p>
+                        <p>Events: ${cloudData.events?.length || 0}</p>
+                        <p>Groceries: ${cloudData.groceries?.length || 0}</p>
+                    </div>
+                </div>
+            `;
+            
+            // Store cloud data for resolution
+            window.pendingCloudData = cloudData;
+            
+            modal.style.display = 'block';
         }
         
         function resolveConflict(choice) {
@@ -2279,12 +2602,27 @@
                 // Keep local version and push to cloud
                 syncToCloud();
             } else {
-                // Keep remote version
-                // In production, reload data from cloud
-                alert('Would load cloud version here');
+                // Keep cloud version
+                if (window.pendingCloudData) {
+                    applyCloudData(window.pendingCloudData);
+                    delete window.pendingCloudData;
+                }
             }
             
             document.getElementById('conflictModal').style.display = 'none';
+        }
+        
+        function applyCloudData(cloudData) {
+            if (cloudData.tasks) tasks = cloudData.tasks;
+            if (cloudData.events) events = cloudData.events;
+            if (cloudData.groceries) groceries = cloudData.groceries;
+            
+            saveTasks();
+            saveEvents();
+            saveGroceries();
+            
+            renderCurrentTab();
+            updateStats();
         }
         
         // Click outside modal to close
@@ -2301,6 +2639,13 @@
                 conflictModal.style.display = 'none';
             }
         }
+        
+        // Prevent form submission on Enter in date fields
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && (e.target.id === 'taskDueDate' || e.target.id === 'eventDate')) {
+                e.preventDefault();
+            }
+        });
         
         // Initialize app
         init();
