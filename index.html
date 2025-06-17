@@ -1,0 +1,2633 @@
+        // Conflict Resolution
+        function showConflictResolution(data) {
+            const modal = document.getElementById('conflictModal');
+            const versionsContainer = document.getElementById('conflictVersions');
+            
+            const localVersion = {
+                id: 'local',
+                title: 'Local Version',
+                device: 'This Device',
+                timestamp: localStorage.getItem('lastSyncTime') || new Date().toISOString(),
+                data: data.local
+            };
+            
+            const cloudVersion = {
+                id: 'cloud',
+                title: 'Cloud Version',
+                device: data.cloud.metadata.device || 'Another Device',
+                timestamp: data.cloud.metadata.lastModified,
+                data: data.cloud
+            };
+            
+            // Store data globally for access in selectConflictVersion
+            window.conflictLocalData = localVersion.data;
+            window.conflictCloudData = cloudVersion.data;
+            
+            versionsContainer.innerHTML = `
+                <div class="conflict-version" onclick="selectConflictVersion('local')">
+                    <div class="conflict-version-header">${localVersion.title}</div>
+                    <div class="conflict-version-meta">
+                        Device: ${localVersion.device}<br>
+                        Last modified: ${formatDateTime(localVersion.timestamp)}
+                    </div>
+                    <div class="conflict-version-content">
+                        Tasks: ${localVersion.data.tasks.length}<br>
+                        Events: ${localVersion.data.events.length}<br>
+                        Groceries: ${localVersion.data.groceries.length}
+                    </div>
+                </div>
+                <div class="conflict-version" onclick="selectConflictVersion('cloud')">
+                    <div class="conflict-version-header">${cloudVersion.title}</div>
+                    <div class="conflict-version-meta">
+                        Device: ${cloudVersion.device}<br>
+                        Last modified: ${formatDateTime(cloudVersion.timestamp)}
+                    </div>
+                    <div class="conflict-version-content">
+                        Tasks: ${cloudVersion.data.tasks.length}<br>
+                        Events: ${cloudVersion.data.events.length}<br>
+                        Groceries: ${cloudVersion.data.groceries.length}
+                    </div>
+                </div>
+            `;
+            
+            window.conflictData = { local: localVersion.data, cloud: cloudVersion.data };
+            modal.classList.add('show');
+        }
+        
+        function selectConflictVersion(version) {
+            selectedConflictVersion = version;
+            document.querySelectorAll('.conflict-version').forEach(el => {
+                el.classList.remove('selected');
+            });
+            event.currentTarget.classList.add('selected');
+        }
+        
+        async function resolveConflict() {
+            if (!selectedConflictVersion) {
+                alert('Please select a version to keep');
+                return;
+            }
+            
+            const dataToUse = window.conflictData[selectedConflictVersion];
+            
+            // Apply the selected version
+            tasks = dataToUse.tasks;
+            events = dataToUse.events;
+            groceries = dataToUse.groceries;
+            
+            // Save locally
+            saveToLocal();
+            
+            // Upload to OneDrive
+            const metadata = {
+                lastModified: new Date().toISOString(),
+                device: navigator.userAgent.substring(0, 50)
+            };
+            
+            try {
+                await Promise.all([
+                    writeToOneDrive('tasks.json', tasks),
+                    writeToOneDrive('events.json', events),
+                    writeToOneDrive('groceries.json', groceries),
+                    writeToOneDrive('metadata.json', metadata)
+                ]);
+                
+                localStorage.setItem('lastSyncTime', metadata.lastModified);
+                updateSyncStatus('synced', 'Synced');
+            } catch (error) {
+                console.error('Error resolving conflict:', error);
+                updateSyncStatus('error', 'Sync failed');
+            }
+            
+            // Update UI
+            renderTasks();
+            updateStats();
+            renderCalendar();
+            renderGroceries();
+            
+            closeConflictModal();
+        }
+        
+        function cancelConflictResolution() {
+            closeConflictModal();
+            updateSyncStatus('error', 'Sync cancelled');
+        }
+        
+        function closeConflictModal() {
+            document.getElementById('conflictModal').classList.remove('show');
+            selectedConflictVersion = null;
+            window.conflictData = null;
+        }
+        
+        // Local Storage Functions<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Organizer - OneDrive Sync</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        /* Auth Section */
+        .auth-container {
+            max-width: 400px;
+            margin: 100px auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        
+        .auth-container h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        
+        .auth-container p {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+        }
+        
+        .ms-login-btn {
+            background: #0078d4;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.3s;
+        }
+        
+        .ms-login-btn:hover {
+            background: #106ebe;
+        }
+        
+        /* Main Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            display: none;
+        }
+        
+        .container.authenticated {
+            display: block;
+        }
+        
+        /* Sync Status Bar */
+        .sync-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+        }
+        
+        .sync-status.syncing {
+            background: #fff3cd;
+        }
+        
+        .sync-status.synced {
+            background: #d4edda;
+        }
+        
+        .sync-status.error {
+            background: #f8d7da;
+        }
+        
+        .sync-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #28a745;
+        }
+        
+        .sync-status.syncing .sync-indicator {
+            background: #ffc107;
+            animation: pulse 1s infinite;
+        }
+        
+        .sync-status.error .sync-indicator {
+            background: #dc3545;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            font-weight: 700;
+        }
+        
+        /* Navigation Tabs */
+        .nav-tabs {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+            background: white;
+            border-radius: 15px;
+            padding: 5px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-tab {
+            flex: 1;
+            padding: 15px 25px;
+            text-align: center;
+            border: none;
+            background: transparent;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #7f8c8d;
+        }
+        
+        .nav-tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        /* Tab Content */
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Stats Cards */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .stat-number {
+            font-size: 2em;
+            font-weight: 700;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            color: #7f8c8d;
+            font-weight: 600;
+        }
+        
+        /* Forms */
+        .add-item {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #34495e;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e6ed;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .form-row-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        /* Category Filters */
+        .category-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            justify-content: center;
+        }
+        
+        .category-filter {
+            padding: 8px 16px;
+            border: 2px solid #e0e6ed;
+            background: white;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+        
+        .category-filter.active {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+        }
+        
+        /* Task Sections */
+        .task-section {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .task-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .task-section-title {
+            font-size: 1.2em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
+        .toggle-icon {
+            font-size: 20px;
+            transition: transform 0.3s ease;
+        }
+        
+        .task-section.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        
+        .task-section-content {
+            display: block;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .task-section.collapsed .task-section-content {
+            display: none;
+        }
+        
+        /* Task Cards */
+        .items-container {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .item-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #667eea;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        
+        .item-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+        }
+        
+        .item-card.completed {
+            opacity: 0.7;
+            border-left-color: #2ecc71;
+        }
+        
+        .item-card.overdue {
+            border-left-color: #e74c3c;
+        }
+        
+        .category-home { border-left-color: #3498db !important; }
+        .category-leisure { border-left-color: #9b59b6 !important; }
+        .category-gr-yaris { border-left-color: #f39c12 !important; }
+        .category-street-triple { border-left-color: #e74c3c !important; }
+        
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .item-title {
+            font-size: 1.3em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
+        .item-badges {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .item-priority {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .priority-high { background: #ffebee; color: #c62828; }
+        .priority-medium { background: #fff3e0; color: #ef6c00; }
+        .priority-low { background: #e8f5e8; color: #2e7d32; }
+        
+        .item-category {
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .category-home-badge { background: #e3f2fd; color: #1976d2; }
+        .category-leisure-badge { background: #f3e5f5; color: #7b1fa2; }
+        .category-gr-yaris-badge { background: #fff3e0; color: #ef6c00; }
+        .category-street-triple-badge { background: #ffebee; color: #c62828; }
+        
+        .item-details {
+            margin-bottom: 15px;
+        }
+        
+        .item-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            color: #7f8c8d;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .item-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 12px;
+            border-radius: 20px;
+        }
+        
+        .btn-complete {
+            background: #2ecc71;
+        }
+        
+        .btn-delete {
+            background: #e74c3c;
+        }
+        
+        /* Calendar Styles */
+        .calendar-container {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        .calendar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .calendar-nav {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .calendar-nav button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        
+        .calendar-title {
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 1px;
+            background: #e0e6ed;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .calendar-day-header {
+            background: #667eea;
+            color: white;
+            padding: 15px 5px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        
+        .calendar-day {
+            background: white;
+            min-height: 100px;
+            padding: 8px;
+            position: relative;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .calendar-day:hover {
+            background: #f8f9fa;
+        }
+        
+        .calendar-day.other-month {
+            background: #f8f9fa;
+            color: #bdc3c7;
+        }
+        
+        .calendar-day.today {
+            background: #e3f2fd;
+        }
+        
+        .calendar-day-number {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        
+        .calendar-event {
+            background: #667eea;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            margin-bottom: 2px;
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        /* Calendar event colors - UPDATED per TODO_1 */
+        .calendar-event.home { background: #3498db; } /* Blue */
+        .calendar-event.leisure { background: #9b59b6; } /* Purple */
+        .calendar-event.gr-yaris { background: #f39c12; } /* Orange */
+        .calendar-event.street-triple { background: #e74c3c; } /* Red */
+        .calendar-event.birthday { background: #e91e63; } /* Pink */
+        .calendar-event.other { background: #bdc3c7; } /* Light Gray */
+        .calendar-event.poubelles-black { background: #2c3e50; } /* Dark Gray */
+        .calendar-event.poubelles-blue { background: #2980b9; } /* Dark Blue */
+        .calendar-event.poubelles-green { background: #27ae60; } /* Green */
+        .calendar-event.poubelles-blue-bag { background: #5dade2; } /* Light Blue */
+        
+        .calendar-event.task {
+            background: #ff6b35; /* Highly visible Orange */
+        }
+        
+        .calendar-event.overdue {
+            background: #e74c3c;
+        }
+        
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+        }
+        
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 20px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: slideUp 0.3s ease;
+            overflow: hidden;
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            font-size: 1.3em;
+            font-weight: 700;
+        }
+        
+        .modal-body {
+            padding: 30px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        
+        .modal-detail {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        
+        .modal-detail-label {
+            font-weight: 600;
+            color: #667eea;
+            min-width: 100px;
+        }
+        
+        .modal-detail-value {
+            color: #2c3e50;
+            flex: 1;
+        }
+        
+        .modal-footer {
+            background: #f8f9fa;
+            padding: 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        
+        .modal-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 25px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .modal-btn-cancel {
+            background: #e0e6ed;
+            color: #2c3e50;
+        }
+        
+        .modal-btn-delete {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .modal-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        /* Grocery Styles */
+        .grocery-item {
+            background: white;
+            border-radius: 10px;
+            padding: 15px 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.3s ease;
+            border-left: 4px solid #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .grocery-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+        
+        .grocery-item.completed {
+            opacity: 0.6;
+            text-decoration: line-through;
+            border-left-color: #2ecc71;
+        }
+        
+        .grocery-checkbox {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .grocery-content {
+            flex: 1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .grocery-name {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .grocery-category-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #f8f9fa;
+            color: #6c757d;
+        }
+        
+        .grocery-delete {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .clear-groceries-btn {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .clear-groceries-btn:hover {
+            background: #c0392b;
+            transform: translateY(-2px);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #7f8c8d;
+        }
+        
+        .empty-state h3 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+        }
+        
+        /* Conflict Resolution Modal */
+        .conflict-modal {
+            max-width: 800px;
+        }
+        
+        .conflict-versions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        
+        .conflict-version {
+            border: 2px solid #e0e6ed;
+            border-radius: 10px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .conflict-version:hover {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.2);
+        }
+        
+        .conflict-version.selected {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+        
+        .conflict-version-header {
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .conflict-version-meta {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+        }
+        
+        .conflict-version-content {
+            font-size: 14px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .form-row, .form-row-3 {
+                grid-template-columns: 1fr;
+            }
+            
+            .container {
+                padding: 20px;
+            }
+            
+            h1 {
+                font-size: 2em;
+            }
+            
+            .nav-tabs {
+                flex-direction: column;
+            }
+            
+            .calendar-day {
+                min-height: 80px;
+            }
+            
+            .conflict-versions {
+                grid-template-columns: 1fr;
+            }
+            
+            .sync-status {
+                top: 10px;
+                right: 10px;
+                padding: 8px 15px;
+                font-size: 14px;
+            }
+        }
+    </style>
+    <!-- MSAL Browser Library for Authentication -->
+    <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+</head>
+<body>
+    <!-- Authentication Section -->
+    <div class="auth-container" id="authContainer">
+        <h2>🚗📅 Personal Organizer</h2>
+        <p>Sign in with your Microsoft account to sync your data across all devices</p>
+        <button class="ms-login-btn" onclick="signIn()">
+            <svg width="20" height="20" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M11 11H0V0H11V11Z" fill="#F25022"/>
+                <path d="M23 11H12V0H23V11Z" fill="#7FBA00"/>
+                <path d="M11 23H0V12H11V23Z" fill="#00A4EF"/>
+                <path d="M23 23H12V12H23V23Z" fill="#FFB900"/>
+            </svg>
+            Sign in with Microsoft
+        </button>
+    </div>
+
+    <!-- Sync Status -->
+    <div class="sync-status synced" id="syncStatus" style="display: none;">
+        <div class="sync-indicator"></div>
+        <span id="syncStatusText">Synced</span>
+    </div>
+
+    <!-- Main Application -->
+    <div class="container" id="mainContainer">
+        <h1>🚗📅 Personal Organizer</h1>
+        
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="switchTab('tasks')">📋 Tasks</button>
+            <button class="nav-tab" onclick="switchTab('calendar')">📅 Calendar</button>
+            <button class="nav-tab" onclick="switchTab('groceries')">🛒 Groceries</button>
+        </div>
+        
+        <!-- Tasks Tab -->
+        <div id="tasksTab" class="tab-content active">
+            <div class="stats" id="stats">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalTasks">0</div>
+                    <div class="stat-label">Total Tasks</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="completedTasks">0</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="overdueTasks">0</div>
+                    <div class="stat-label">Overdue</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="upcomingTasks">0</div>
+                    <div class="stat-label">Due This Week</div>
+                </div>
+            </div>
+            
+            <div class="add-item">
+                <h2>Add New Task</h2>
+                <form id="taskForm">
+                    <div class="form-group">
+                        <label for="taskTitle">Task Title</label>
+                        <input type="text" id="taskTitle" required placeholder="e.g., Oil change">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="taskDescription">Description (optional)</label>
+                        <textarea id="taskDescription" rows="3" placeholder="Additional details..."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="taskCategory">Category</label>
+                        <select id="taskCategory">
+                            <option value="home">🏠 Home</option>
+                            <option value="leisure">🎯 Leisure</option>
+                            <option value="gr-yaris">🏎️ GR Yaris</option>
+                            <option value="street-triple">🏍️ Street Triple</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="taskDueDate">Due Date</label>
+                            <input type="date" id="taskDueDate">
+                        </div>
+                        <div class="form-group">
+                            <label for="taskPriority">Priority</label>
+                            <select id="taskPriority">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" class="btn">Add Task</button>
+                </form>
+            </div>
+            
+            <div class="category-filters">
+                <div class="category-filter active" data-category="all">All Categories</div>
+                <div class="category-filter" data-category="home">🏠 Home</div>
+                <div class="category-filter" data-category="leisure">🎯 Leisure</div>
+                <div class="category-filter" data-category="gr-yaris">🏎️ GR Yaris</div>
+                <div class="category-filter" data-category="street-triple">🏍️ Street Triple</div>
+            </div>
+            
+            <!-- Open Tasks Section -->
+            <div class="task-section" id="openTasksSection">
+                <div class="task-section-header" onclick="toggleTaskSection('open')">
+                    <h3 class="task-section-title">Open Tasks</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="task-section-content">
+                    <div class="items-container" id="openTasksContainer">
+                        <div class="empty-state">
+                            <h3>No open tasks</h3>
+                            <p>All caught up!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Completed Tasks Section -->
+            <div class="task-section collapsed" id="completedTasksSection">
+                <div class="task-section-header" onclick="toggleTaskSection('completed')">
+                    <h3 class="task-section-title">Completed Tasks</h3>
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="task-section-content">
+                    <div class="items-container" id="completedTasksContainer">
+                        <div class="empty-state">
+                            <h3>No completed tasks</h3>
+                            <p>Complete some tasks to see them here!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Calendar Tab -->
+        <div id="calendarTab" class="tab-content">
+            <div class="add-item">
+                <h2>Add Calendar Event</h2>
+                <form id="eventForm">
+                    <div class="form-group">
+                        <label for="eventTitle">Event Title</label>
+                        <input type="text" id="eventTitle" required placeholder="e.g., Appointment, Meeting">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="eventDescription">Description (optional)</label>
+                        <textarea id="eventDescription" rows="2" placeholder="Additional details..."></textarea>
+                    </div>
+                    
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label for="eventDate">Date</label>
+                            <input type="date" id="eventDate" required>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="eventHour">Hour</label>
+                                <select id="eventHour">
+                                    <option value="">No time</option>
+                                    <option value="00">00</option>
+                                    <option value="01">01</option>
+                                    <option value="02">02</option>
+                                    <option value="03">03</option>
+                                    <option value="04">04</option>
+                                    <option value="05">05</option>
+                                    <option value="06">06</option>
+                                    <option value="07">07</option>
+                                    <option value="08">08</option>
+                                    <option value="09">09</option>
+                                    <option value="10">10</option>
+                                    <option value="11">11</option>
+                                    <option value="12">12</option>
+                                    <option value="13">13</option>
+                                    <option value="14">14</option>
+                                    <option value="15">15</option>
+                                    <option value="16">16</option>
+                                    <option value="17">17</option>
+                                    <option value="18">18</option>
+                                    <option value="19">19</option>
+                                    <option value="20">20</option>
+                                    <option value="21">21</option>
+                                    <option value="22">22</option>
+                                    <option value="23">23</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="eventMinute">Minutes</label>
+                                <select id="eventMinute">
+                                    <option value="">No time</option>
+                                    <option value="00">00</option>
+                                    <option value="15">15</option>
+                                    <option value="30">30</option>
+                                    <option value="45">45</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventMainCategory">Main Category</label>
+                            <select id="eventMainCategory">
+                                <option value="home">🏠 Home</option>
+                                <option value="leisure">🎯 Leisure</option>
+                                <option value="gr-yaris">🏎️ GR Yaris</option>
+                                <option value="street-triple">🏍️ Street Triple</option>
+                                <option value="birthday">🎂 Birthday</option>
+                                <option value="poubelles">🗑️ Poubelles</option>
+                                <option value="other">📦 Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div id="subcategorySection" class="form-group" style="display: none;">
+                        <label for="eventSubcategory">Subcategory</label>
+                        <select id="eventSubcategory">
+                            <!-- Options will be populated dynamically -->
+                        </select>
+                    </div>
+                    
+                    <div id="recurrenceSection" class="form-group" style="display: none;">
+                        <label for="eventRecurrence">Recurrence</label>
+                        <select id="eventRecurrence">
+                            <option value="none">No recurrence</option>
+                            <option value="yearly">Yearly</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+                    
+                    <button type="submit" class="btn">Add Event</button>
+                </form>
+            </div>
+            
+            <div class="calendar-container">
+                <div class="calendar-header">
+                    <div class="calendar-nav">
+                        <button onclick="changeMonth(-1)">‹</button>
+                        <button onclick="changeMonth(1)">›</button>
+                    </div>
+                    <h2 class="calendar-title" id="calendarTitle"></h2>
+                    <button class="btn" onclick="goToToday()">Today</button>
+                </div>
+                <div class="calendar-grid" id="calendarGrid"></div>
+            </div>
+        </div>
+        
+        <!-- Groceries Tab -->
+        <div id="groceriesTab" class="tab-content">
+            <div class="add-item">
+                <h2>Add Grocery Item</h2>
+                <form id="groceryForm">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="groceryItem">Item</label>
+                            <input type="text" id="groceryItem" required placeholder="e.g., Milk, Bread, Apples">
+                        </div>
+                        <div class="form-group">
+                            <label for="groceryCategory">Category (optional)</label>
+                            <select id="groceryCategory">
+                                <option value="">No category</option>
+                                <option value="dairy">🥛 Dairy</option>
+                                <option value="meat">🥩 Meat</option>
+                                <option value="vegetables">🥕 Vegetables</option>
+                                <option value="fruits">🍎 Fruits</option>
+                                <option value="grains">🍞 Grains</option>
+                                <option value="snacks">🍿 Snacks</option>
+                                <option value="beverages">🥤 Beverages</option>
+                                <option value="cleaning">🧽 Cleaning</option>
+                                <option value="personal-care">🧴 Personal Care</option>
+                                <option value="other">📦 Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn">Add Item</button>
+                </form>
+            </div>
+            
+            <div class="category-filters" id="groceryCategories">
+                <div class="category-filter active" data-grocery-category="all">All Items</div>
+                <div class="category-filter" data-grocery-category="">🛒 Uncategorized</div>
+                <div class="category-filter" data-grocery-category="dairy">🥛 Dairy</div>
+                <div class="category-filter" data-grocery-category="meat">🥩 Meat</div>
+                <div class="category-filter" data-grocery-category="vegetables">🥕 Vegetables</div>
+                <div class="category-filter" data-grocery-category="fruits">🍎 Fruits</div>
+                <div class="category-filter" data-grocery-category="grains">🍞 Grains</div>
+                <div class="category-filter" data-grocery-category="snacks">🍿 Snacks</div>
+                <div class="category-filter" data-grocery-category="beverages">🥤 Beverages</div>
+                <div class="category-filter" data-grocery-category="cleaning">🧽 Cleaning</div>
+                <div class="category-filter" data-grocery-category="personal-care">🧴 Personal Care</div>
+                <div class="category-filter" data-grocery-category="other">📦 Other</div>
+            </div>
+            
+            <div class="items-container" id="groceriesContainer">
+                <div class="empty-state">
+                    <h3>No grocery items yet</h3>
+                    <p>Add your first item above to start your shopping list!</p>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+                <button class="clear-groceries-btn" id="clearGroceriesBtn" onclick="clearGroceryList()" style="display: none;">🗑️ Clear All Items</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event/Task Details Modal -->
+    <div id="detailsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header" id="modalTitle">
+                Event Details
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Content will be populated dynamically -->
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn modal-btn-cancel" onclick="closeModal()">Close</button>
+                <button class="modal-btn" style="background: #667eea; color: white;" id="modalModifyBtn" onclick="modifyItem()">Modify</button>
+                <button class="modal-btn modal-btn-delete" id="modalDeleteBtn" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conflict Resolution Modal -->
+    <div id="conflictModal" class="modal">
+        <div class="modal-content conflict-modal">
+            <div class="modal-header">
+                ⚠️ Sync Conflict Detected
+            </div>
+            <div class="modal-body">
+                <p>Your local data conflicts with the cloud version. Please choose which version to keep:</p>
+                <div class="conflict-versions" id="conflictVersions">
+                    <!-- Conflict versions will be populated dynamically -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn modal-btn-cancel" onclick="cancelConflictResolution()">Cancel</button>
+                <button class="modal-btn" style="background: #667eea; color: white;" onclick="resolveConflict()">Use Selected Version</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global Variables
+        let tasks = [];
+        let events = [];
+        let groceries = [];
+        let currentDate = new Date();
+        let activeCategory = 'all';
+        let activeGroceryCategory = 'all';
+        let currentModal = null;
+        let currentModalType = null;
+        let currentModalId = null;
+        let selectedConflictVersion = null;
+        
+        // OneDrive Integration Variables
+        let msalClient = null;
+        let accessToken = null;
+        let userAccount = null;
+        let syncInterval = null;
+        let lastSyncTime = null;
+        const SYNC_INTERVAL = 60000; // 1 minute
+        const APP_FOLDER = 'PersonalOrganizer';
+        
+        // Microsoft Authentication Configuration
+        const msalConfig = {
+            auth: {
+                clientId: 'YOUR_CLIENT_ID_HERE', // Replace with your app's client ID from Azure
+                authority: 'https://login.microsoftonline.com/consumers', // For personal accounts
+                redirectUri: window.location.origin // Current page URL
+            },
+            cache: {
+                cacheLocation: 'localStorage',
+                storeAuthStateInCookie: false
+            }
+        };
+        
+        const loginRequest = {
+            scopes: ['Files.ReadWrite', 'User.Read', 'offline_access']
+        };
+        
+        const graphConfig = {
+            graphMeEndpoint: 'https://graph.microsoft.com/v1.0/me',
+            graphFilesEndpoint: 'https://graph.microsoft.com/v1.0/me/drive/special/approot'
+        };
+        
+        // Initialize MSAL
+        async function initializeMSAL() {
+            try {
+                msalClient = new msal.PublicClientApplication(msalConfig);
+                await msalClient.initialize();
+                
+                // Check if user is already signed in
+                const accounts = msalClient.getAllAccounts();
+                if (accounts.length > 0) {
+                    userAccount = accounts[0];
+                    await getTokenAndSync();
+                }
+            } catch (error) {
+                console.error('MSAL initialization error:', error);
+            }
+        }
+        
+        // Get access token
+        async function getAccessToken() {
+            const accounts = msalClient.getAllAccounts();
+            if (accounts.length === 0) return null;
+            
+            const request = {
+                scopes: loginRequest.scopes,
+                account: accounts[0]
+            };
+            
+            try {
+                const response = await msalClient.acquireTokenSilent(request);
+                return response.accessToken;
+            } catch (error) {
+                // If silent token acquisition fails, acquire token interactive
+                const response = await msalClient.acquireTokenPopup(request);
+                return response.accessToken;
+            }
+        }
+        
+        // Sign In
+        async function signIn() {
+            try {
+                const loginResponse = await msalClient.loginPopup(loginRequest);
+                userAccount = loginResponse.account;
+                accessToken = loginResponse.accessToken;
+                
+                document.getElementById('authContainer').style.display = 'none';
+                document.getElementById('mainContainer').classList.add('authenticated');
+                document.getElementById('syncStatus').style.display = 'flex';
+                
+                // Load data from local storage first
+                loadLocalData();
+                
+                // Start sync process
+                await syncData();
+                startAutoSync();
+                
+            } catch (error) {
+                console.error('Sign in error:', error);
+                alert('Failed to sign in. Please try again.');
+            }
+        }
+        
+        // Get token and sync
+        async function getTokenAndSync() {
+            try {
+                accessToken = await getAccessToken();
+                if (accessToken) {
+                    document.getElementById('authContainer').style.display = 'none';
+                    document.getElementById('mainContainer').classList.add('authenticated');
+                    document.getElementById('syncStatus').style.display = 'flex';
+                    
+                    loadLocalData();
+                    await syncData();
+                    startAutoSync();
+                }
+            } catch (error) {
+                console.error('Token acquisition error:', error);
+            }
+        }
+        
+        // OneDrive API Functions
+        async function readFromOneDrive(filename) {
+            const token = await getAccessToken();
+            if (!token) throw new Error('No access token');
+            
+            try {
+                const response = await fetch(`https://graph.microsoft.com/v1.0/me/drive/special/approot:/${filename}:/content`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.status === 404) {
+                    return null; // File doesn't exist yet
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error(`Error reading ${filename} from OneDrive:`, error);
+                throw error;
+            }
+        }
+        
+        async function writeToOneDrive(filename, data) {
+            const token = await getAccessToken();
+            if (!token) throw new Error('No access token');
+            
+            try {
+                const response = await fetch(`https://graph.microsoft.com/v1.0/me/drive/special/approot:/${filename}:/content`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error(`Error writing ${filename} to OneDrive:`, error);
+                throw error;
+            }
+        }
+        
+        // OneDrive Sync Functions
+        async function syncData() {
+            if (!accessToken) return;
+            
+            updateSyncStatus('syncing', 'Syncing...');
+            
+            try {
+                // Read data from OneDrive
+                const [cloudTasks, cloudEvents, cloudGroceries, cloudMetadata] = await Promise.all([
+                    readFromOneDrive('tasks.json'),
+                    readFromOneDrive('events.json'),
+                    readFromOneDrive('groceries.json'),
+                    readFromOneDrive('metadata.json')
+                ]);
+                
+                const localMetadata = {
+                    lastModified: new Date().toISOString(),
+                    device: navigator.userAgent.substring(0, 50)
+                };
+                
+                // If no cloud data exists, upload local data
+                if (!cloudMetadata) {
+                    await Promise.all([
+                        writeToOneDrive('tasks.json', tasks),
+                        writeToOneDrive('events.json', events),
+                        writeToOneDrive('groceries.json', groceries),
+                        writeToOneDrive('metadata.json', localMetadata)
+                    ]);
+                } else {
+                    // Check for conflicts
+                    const localLastModified = localStorage.getItem('lastSyncTime');
+                    const hasLocalChanges = localLastModified && new Date(localLastModified) > new Date(cloudMetadata.lastModified);
+                    
+                    if (hasLocalChanges && cloudMetadata.lastModified !== localLastModified) {
+                        // Show conflict resolution
+                        showConflictResolution({
+                            local: { tasks, events, groceries, metadata: localMetadata },
+                            cloud: { 
+                                tasks: cloudTasks || [], 
+                                events: cloudEvents || [], 
+                                groceries: cloudGroceries || [],
+                                metadata: cloudMetadata 
+                            }
+                        });
+                        return;
+                    } else {
+                        // No conflict, use cloud data
+                        if (cloudTasks) tasks = cloudTasks;
+                        if (cloudEvents) events = cloudEvents;
+                        if (cloudGroceries) groceries = cloudGroceries;
+                        
+                        saveToLocal();
+                        renderTasks();
+                        updateStats();
+                        renderCalendar();
+                        renderGroceries();
+                    }
+                }
+                
+                lastSyncTime = new Date();
+                localStorage.setItem('lastSyncTime', lastSyncTime.toISOString());
+                updateSyncStatus('synced', 'Synced');
+                
+            } catch (error) {
+                console.error('Sync error:', error);
+                updateSyncStatus('error', 'Sync failed');
+            }
+        }
+        
+        function startAutoSync() {
+            // Sync on window focus
+            window.addEventListener('focus', () => {
+                if (Date.now() - lastSyncTime > 30000) { // 30 seconds
+                    syncData();
+                }
+            });
+            
+            // Periodic sync
+            syncInterval = setInterval(syncData, SYNC_INTERVAL);
+        }
+        
+        function updateSyncStatus(status, text) {
+            const syncStatus = document.getElementById('syncStatus');
+            const syncStatusText = document.getElementById('syncStatusText');
+            
+            syncStatus.className = `sync-status ${status}`;
+            syncStatusText.textContent = text;
+        }
+        
+        // Conflict Resolution
+        function showConflictResolution(dataType) {
+            const modal = document.getElementById('conflictModal');
+            const versionsContainer = document.getElementById('conflictVersions');
+            
+            // Create mock conflict data
+            const localVersion = {
+                id: 'local',
+                title: 'Local Version',
+                device: 'This Device',
+                timestamp: new Date().toISOString(),
+                data: JSON.stringify({ tasks, events, groceries }, null, 2)
+            };
+            
+            const cloudVersion = {
+                id: 'cloud',
+                title: 'Cloud Version',
+                device: 'Another Device',
+                timestamp: new Date(Date.now() - 3600000).toISOString(), // 1 hour ago
+                data: JSON.stringify({
+                    tasks: [...tasks, { id: 999, title: 'Cloud Task', completed: false }],
+                    events,
+                    groceries
+                }, null, 2)
+            };
+            
+            versionsContainer.innerHTML = `
+                <div class="conflict-version" onclick="selectConflictVersion('local')">
+                    <div class="conflict-version-header">${localVersion.title}</div>
+                    <div class="conflict-version-meta">
+                        Device: ${localVersion.device}<br>
+                        Last modified: ${formatDateTime(localVersion.timestamp)}
+                    </div>
+                    <div class="conflict-version-content">
+                        <pre>${localVersion.data.substring(0, 200)}...</pre>
+                    </div>
+                </div>
+                <div class="conflict-version" onclick="selectConflictVersion('cloud')">
+                    <div class="conflict-version-header">${cloudVersion.title}</div>
+                    <div class="conflict-version-meta">
+                        Device: ${cloudVersion.device}<br>
+                        Last modified: ${formatDateTime(cloudVersion.timestamp)}
+                    </div>
+                    <div class="conflict-version-content">
+                        <pre>${cloudVersion.data.substring(0, 200)}...</pre>
+                    </div>
+                </div>
+            `;
+            
+            modal.classList.add('show');
+        }
+        
+        function selectConflictVersion(version) {
+            selectedConflictVersion = version;
+            document.querySelectorAll('.conflict-version').forEach(el => {
+                el.classList.remove('selected');
+            });
+            event.currentTarget.classList.add('selected');
+        }
+        
+        function resolveConflict() {
+            if (!selectedConflictVersion) {
+                alert('Please select a version to keep');
+                return;
+            }
+            
+            // In production, apply the selected version
+            console.log('Resolved conflict with:', selectedConflictVersion);
+            
+            closeConflictModal();
+            updateSyncStatus('synced', 'Synced');
+        }
+        
+        function cancelConflictResolution() {
+            closeConflictModal();
+            updateSyncStatus('error', 'Sync cancelled');
+        }
+        
+        function closeConflictModal() {
+            document.getElementById('conflictModal').classList.remove('show');
+            selectedConflictVersion = null;
+        }
+        
+        // Local Storage Functions
+        async function saveToLocal() {
+            localStorage.setItem('personalTasks', JSON.stringify(tasks));
+            localStorage.setItem('personalEvents', JSON.stringify(events));
+            localStorage.setItem('personalGroceries', JSON.stringify(groceries));
+            localStorage.setItem('lastModified', new Date().toISOString());
+            
+            // Trigger sync after save if signed in
+            if (accessToken && lastSyncTime && Date.now() - lastSyncTime > 5000) {
+                // Upload to OneDrive
+                try {
+                    const metadata = {
+                        lastModified: new Date().toISOString(),
+                        device: navigator.userAgent.substring(0, 50)
+                    };
+                    
+                    await Promise.all([
+                        writeToOneDrive('tasks.json', tasks),
+                        writeToOneDrive('events.json', events),
+                        writeToOneDrive('groceries.json', groceries),
+                        writeToOneDrive('metadata.json', metadata)
+                    ]);
+                    
+                    localStorage.setItem('lastSyncTime', metadata.lastModified);
+                    updateSyncStatus('synced', 'Synced');
+                } catch (error) {
+                    console.error('Auto-sync error:', error);
+                    updateSyncStatus('error', 'Sync failed');
+                }
+            }
+        }
+        
+        function loadLocalData() {
+            tasks = JSON.parse(localStorage.getItem('personalTasks')) || getDefaultTasks();
+            events = JSON.parse(localStorage.getItem('personalEvents')) || [];
+            groceries = JSON.parse(localStorage.getItem('personalGroceries')) || [];
+            
+            renderTasks();
+            updateStats();
+            renderCalendar();
+            renderGroceries();
+        }
+        
+        function getDefaultTasks() {
+            return [
+                {
+                    id: 1,
+                    title: 'ACD',
+                    description: 'Complete ACD process',
+                    category: 'gr-yaris',
+                    dueDate: '',
+                    priority: 'medium',
+                    completed: false,
+                    createdAt: new Date().toISOString()
+                },
+                {
+                    id: 2,
+                    title: 'Contrôle technique',
+                    description: 'Technical inspection for GR Yaris',
+                    category: 'gr-yaris',
+                    dueDate: '',
+                    priority: 'high',
+                    completed: false,
+                    createdAt: new Date().toISOString()
+                },
+                {
+                    id: 3,
+                    title: 'Entretien',
+                    description: 'Vehicle maintenance',
+                    category: 'gr-yaris',
+                    dueDate: '',
+                    priority: 'medium',
+                    completed: false,
+                    createdAt: new Date().toISOString()
+                },
+                {
+                    id: 4,
+                    title: 'ABE manette',
+                    description: 'Controller handle certification',
+                    category: 'street-triple',
+                    dueDate: '',
+                    priority: 'low',
+                    completed: false,
+                    createdAt: new Date().toISOString()
+                }
+            ];
+        }
+        
+        // Date Formatting Functions
+        function formatDate(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            const day = date.getDate().toString().padStart(2, '0');
+            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+            const year = date.getFullYear();
+            return `${day}/${month}/${year}`;
+        }
+        
+        function formatDateTime(dateString) {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            return `${formatDate(dateString)} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+        }
+        
+        function formatDateForInput(dateString) {
+            if (!dateString) return '';
+            if (dateString.includes('/')) {
+                const parts = dateString.split('/');
+                if (parts.length === 3) {
+                    return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                }
+            }
+            return dateString;
+        }
+        
+        // Tab Switching
+        function switchTab(tab) {
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+            
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById(tab + 'Tab').classList.add('active');
+            
+            if (tab === 'calendar') {
+                renderCalendar();
+            } else if (tab === 'groceries') {
+                renderGroceries();
+            }
+        }
+        
+        // Task Section Toggle - FIXED
+        function toggleTaskSection(section) {
+            const sectionElement = document.getElementById(section + 'TasksSection');
+            sectionElement.classList.toggle('collapsed');
+        }
+        
+        // Stats Update
+        function updateStats() {
+            const total = tasks.length;
+            const completed = tasks.filter(task => task.completed).length;
+            const overdue = tasks.filter(task => {
+                if (!task.dueDate || task.completed) return false;
+                return new Date(task.dueDate) < new Date();
+            }).length;
+            
+            const oneWeekFromNow = new Date();
+            oneWeekFromNow.setDate(oneWeekFromNow.getDate() + 7);
+            const upcoming = tasks.filter(task => {
+                if (!task.dueDate || task.completed) return false;
+                const dueDate = new Date(task.dueDate);
+                return dueDate >= new Date() && dueDate <= oneWeekFromNow;
+            }).length;
+            
+            document.getElementById('totalTasks').textContent = total;
+            document.getElementById('completedTasks').textContent = completed;
+            document.getElementById('overdueTasks').textContent = overdue;
+            document.getElementById('upcomingTasks').textContent = upcoming;
+        }
+        
+        // Task Rendering
+        function renderTasks() {
+            const openContainer = document.getElementById('openTasksContainer');
+            const completedContainer = document.getElementById('completedTasksContainer');
+            
+            let filteredTasks = tasks;
+            if (activeCategory !== 'all') {
+                filteredTasks = tasks.filter(task => task.category === activeCategory);
+            }
+            
+            const openTasks = filteredTasks.filter(task => !task.completed);
+            const completedTasks = filteredTasks.filter(task => task.completed);
+            
+            // Render open tasks
+            if (openTasks.length === 0) {
+                openContainer.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No open tasks</h3>
+                        <p>All caught up!</p>
+                    </div>
+                `;
+            } else {
+                const sortedOpenTasks = [...openTasks].sort((a, b) => {
+                    const priorityOrder = { high: 3, medium: 2, low: 1 };
+                    const aPriority = priorityOrder[a.priority];
+                    const bPriority = priorityOrder[b.priority];
+                    
+                    if (aPriority !== bPriority) return bPriority - aPriority;
+                    
+                    if (a.dueDate && b.dueDate) {
+                        return new Date(a.dueDate) - new Date(b.dueDate);
+                    }
+                    
+                    return new Date(a.createdAt) - new Date(b.createdAt);
+                });
+                
+                openContainer.innerHTML = sortedOpenTasks.map(task => renderTaskCard(task)).join('');
+            }
+            
+            // Render completed tasks
+            if (completedTasks.length === 0) {
+                completedContainer.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No completed tasks</h3>
+                        <p>Complete some tasks to see them here!</p>
+                    </div>
+                `;
+            } else {
+                const sortedCompletedTasks = [...completedTasks].sort((a, b) => {
+                    return new Date(b.completedAt || b.createdAt) - new Date(a.completedAt || a.createdAt);
+                });
+                
+                completedContainer.innerHTML = sortedCompletedTasks.map(task => renderTaskCard(task)).join('');
+            }
+        }
+        
+        function renderTaskCard(task) {
+            const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && !task.completed;
+            const dueDateFormatted = task.dueDate ? formatDate(task.dueDate) : 'No due date';
+            const completedDateFormatted = task.completedAt ? formatDate(task.completedAt) : '';
+            const createdDateFormatted = formatDate(task.createdAt);
+            
+            return `
+                <div class="item-card category-${task.category} ${task.completed ? 'completed' : ''} ${isOverdue ? 'overdue' : ''}">
+                    <div class="item-header">
+                        <h3 class="item-title">${task.title}</h3>
+                        <div class="item-badges">
+                            <span class="item-category category-${task.category}-badge">${getCategoryIcon(task.category)} ${task.category.replace('-', ' ')}</span>
+                            <span class="item-priority priority-${task.priority}">${task.priority}</span>
+                        </div>
+                    </div>
+                    
+                    ${task.description ? `<div class="item-details">${task.description}</div>` : ''}
+                    
+                    <div class="item-meta">
+                        <span>Due: ${dueDateFormatted}</span>
+                        <span>Created: ${createdDateFormatted}</span>
+                        ${task.completed && completedDateFormatted ? `<span>Completed: ${completedDateFormatted}</span>` : ''}
+                    </div>
+                    
+                    <div class="item-actions">
+                        <button class="btn btn-small btn-complete" onclick="toggleTask(${task.id})">
+                            ${task.completed ? '↩️ Undo' : '✓ Complete'}
+                        </button>
+                        <button class="btn btn-small" style="background: #667eea;" onclick="showTaskDetails(${task.id})">
+                            👁️ Details
+                        </button>
+                        <button class="btn btn-small btn-delete" onclick="deleteTask(${task.id})">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function getCategoryIcon(category) {
+            const icons = {
+                'home': '🏠',
+                'leisure': '🎯',
+                'gr-yaris': '🏎️',
+                'street-triple': '🏍️'
+            };
+            return icons[category] || '📋';
+        }
+        
+        // Task CRUD Operations
+        function addTask(event) {
+            event.preventDefault();
+            
+            const title = document.getElementById('taskTitle').value.trim();
+            const description = document.getElementById('taskDescription').value.trim();
+            const category = document.getElementById('taskCategory').value;
+            const dueDate = document.getElementById('taskDueDate').value; // Already in YYYY-MM-DD format from date picker
+            const priority = document.getElementById('taskPriority').value;
+            
+            if (!title) return;
+            
+            const newTask = {
+                id: Date.now(),
+                title,
+                description,
+                category,
+                dueDate,
+                priority,
+                completed: false,
+                createdAt: new Date().toISOString()
+            };
+            
+            tasks.push(newTask);
+            saveToLocal();
+            renderTasks();
+            updateStats();
+            
+            document.getElementById('taskForm').reset();
+        }
+        
+        function toggleTask(id) {
+            const task = tasks.find(t => t.id === id);
+            if (task) {
+                task.completed = !task.completed;
+                if (task.completed) {
+                    task.completedAt = new Date().toISOString();
+                } else {
+                    delete task.completedAt;
+                }
+                saveToLocal();
+                renderTasks();
+                updateStats();
+                renderCalendar();
+            }
+        }
+        
+        function deleteTask(id) {
+            if (confirm('Are you sure you want to delete this task?')) {
+                tasks = tasks.filter(t => t.id !== id);
+                saveToLocal();
+                renderTasks();
+                updateStats();
+                renderCalendar();
+            }
+        }
+        
+        // Task Details Modal - FIXED
+        function showTaskDetails(id) {
+            const task = tasks.find(t => t.id === id);
+            if (!task) return;
+            
+            currentModal = 'task';
+            currentModalId = id;
+            
+            const modal = document.getElementById('detailsModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalTitle.textContent = 'Task Details';
+            
+            modalBody.innerHTML = `
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Title:</span>
+                    <span class="modal-detail-value">${task.title}</span>
+                </div>
+                ${task.description ? `
+                    <div class="modal-detail">
+                        <span class="modal-detail-label">Description:</span>
+                        <span class="modal-detail-value">${task.description}</span>
+                    </div>
+                ` : ''}
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Category:</span>
+                    <span class="modal-detail-value">${getCategoryIcon(task.category)} ${task.category.replace('-', ' ')}</span>
+                </div>
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Priority:</span>
+                    <span class="modal-detail-value">${task.priority}</span>
+                </div>
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Due Date:</span>
+                    <span class="modal-detail-value">${task.dueDate ? formatDate(task.dueDate) : 'No due date'}</span>
+                </div>
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Status:</span>
+                    <span class="modal-detail-value">${task.completed ? '✅ Completed' : '⏳ Open'}</span>
+                </div>
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Created:</span>
+                    <span class="modal-detail-value">${formatDateTime(task.createdAt)}</span>
+                </div>
+                ${task.completedAt ? `
+                    <div class="modal-detail">
+                        <span class="modal-detail-label">Completed:</span>
+                        <span class="modal-detail-value">${formatDateTime(task.completedAt)}</span>
+                    </div>
+                ` : ''}
+            `;
+            
+            modal.classList.add('show');
+        }
+        
+        // Event Management
+        function addEvent(event) {
+            event.preventDefault();
+            
+            const title = document.getElementById('eventTitle').value.trim();
+            const description = document.getElementById('eventDescription').value.trim();
+            const date = document.getElementById('eventDate').value;
+            const hour = document.getElementById('eventHour').value;
+            const minute = document.getElementById('eventMinute').value;
+            const time = (hour && hour !== '' && minute !== '') ? `${hour}:${minute}` : '';
+            const mainCategory = document.getElementById('eventMainCategory').value;
+            const subcategory = document.getElementById('eventSubcategory').value;
+            const recurrence = document.getElementById('eventRecurrence').value;
+            
+            let category = mainCategory;
+            if (subcategory && subcategory !== 'none') {
+                category = `${mainCategory}-${subcategory}`;
+            }
+            
+            if (!title || !date) return;
+            
+            const newEvent = {
+                id: Date.now(),
+                title,
+                description,
+                date,
+                time,
+                category,
+                mainCategory,
+                recurrence: recurrence || 'none',
+                createdAt: new Date().toISOString()
+            };
+            
+            events.push(newEvent);
+            
+            // Create recurring events if needed
+            if (recurrence === 'yearly') {
+                createRecurringEvents(newEvent, 'yearly', 70); // Create 70 years of events
+            } else if (recurrence === 'monthly') {
+                createRecurringEvents(newEvent, 'monthly', 70); // Create 70 years worth of monthly events (840 events)
+            }
+            
+            saveToLocal();
+            renderCalendar();
+            
+            // Reset form
+            document.getElementById('eventForm').reset();
+            document.getElementById('eventHour').value = '';
+            document.getElementById('eventMinute').value = '';
+            handleMainCategoryChange();
+        }
+        
+        function createRecurringEvents(baseEvent, interval, years) {
+            const baseDate = new Date(baseEvent.date);
+            const count = interval === 'yearly' ? years : years * 12; // Convert years to months for monthly recurrence
+            
+            for (let i = 1; i <= count; i++) {
+                const futureDate = new Date(baseDate);
+                
+                if (interval === 'yearly') {
+                    futureDate.setFullYear(futureDate.getFullYear() + i);
+                } else if (interval === 'monthly') {
+                    futureDate.setMonth(futureDate.getMonth() + i);
+                }
+                
+                const recurringEvent = {
+                    id: Date.now() + Math.random() * 1000 + i,
+                    title: baseEvent.title,
+                    description: baseEvent.description,
+                    date: futureDate.toISOString().split('T')[0],
+                    time: baseEvent.time,
+                    category: baseEvent.category,
+                    mainCategory: baseEvent.mainCategory,
+                    recurrence: baseEvent.recurrence,
+                    parentId: baseEvent.id,
+                    createdAt: new Date().toISOString()
+                };
+                
+                events.push(recurringEvent);
+            }
+        }
+        
+        function deleteEvent(id) {
+            const event = events.find(e => e.id === id);
+            if (event && event.recurrence !== 'none') {
+                // Ask if user wants to delete all recurring events
+                if (confirm('This is a recurring event. Delete all occurrences?')) {
+                    // Delete all related events
+                    events = events.filter(e => e.id !== id && e.parentId !== id);
+                } else {
+                    // Delete only this instance
+                    events = events.filter(e => e.id !== id);
+                }
+            } else {
+                events = events.filter(e => e.id !== id);
+            }
+            saveToLocal();
+            renderCalendar();
+        }
+        
+        // Event Details Modal - FIXED
+        function showEventDetails(id) {
+            const event = events.find(e => e.id === id);
+            if (!event) return;
+            
+            currentModal = 'event';
+            currentModalId = id;
+            
+            const modal = document.getElementById('detailsModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalTitle.textContent = 'Event Details';
+            
+            modalBody.innerHTML = `
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Title:</span>
+                    <span class="modal-detail-value">${event.title}</span>
+                </div>
+                ${event.description ? `
+                    <div class="modal-detail">
+                        <span class="modal-detail-label">Description:</span>
+                        <span class="modal-detail-value">${event.description}</span>
+                    </div>
+                ` : ''}
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Date:</span>
+                    <span class="modal-detail-value">${formatDate(event.date)}</span>
+                </div>
+                ${event.time ? `
+                    <div class="modal-detail">
+                        <span class="modal-detail-label">Time:</span>
+                        <span class="modal-detail-value">${event.time}</span>
+                    </div>
+                ` : ''}
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Category:</span>
+                    <span class="modal-detail-value">${event.category.replace(/-/g, ' ')}</span>
+                </div>
+                <div class="modal-detail">
+                    <span class="modal-detail-label">Created:</span>
+                    <span class="modal-detail-value">${formatDateTime(event.createdAt)}</span>
+                </div>
+            `;
+            
+            modal.classList.add('show');
+        }
+        
+        // Modal Functions
+        function closeModal() {
+            document.getElementById('detailsModal').classList.remove('show');
+            currentModal = null;
+            currentModalId = null;
+        }
+        
+        function confirmDelete() {
+            if (currentModal === 'task' && currentModalId) {
+                deleteTask(currentModalId);
+            } else if (currentModal === 'event' && currentModalId) {
+                deleteEvent(currentModalId);
+            }
+            closeModal();
+        }
+        
+        function modifyItem() {
+            closeModal();
+            
+            if (currentModal === 'task' && currentModalId) {
+                // Modify task
+                const task = tasks.find(t => t.id === currentModalId);
+                if (task) {
+                    // Pre-fill the form
+                    document.getElementById('taskTitle').value = task.title;
+                    document.getElementById('taskDescription').value = task.description || '';
+                    document.getElementById('taskCategory').value = task.category;
+                    document.getElementById('taskDueDate').value = task.dueDate || '';
+                    document.getElementById('taskPriority').value = task.priority;
+                    
+                    // Delete the old task (will create new one on form submit)
+                    tasks = tasks.filter(t => t.id !== currentModalId);
+                    saveToLocal();
+                    renderTasks();
+                    updateStats();
+                    
+                    // Switch to tasks tab and scroll to form
+                    switchTab('tasks');
+                    document.querySelector('.add-item').scrollIntoView({ behavior: 'smooth' });
+                }
+            } else if (currentModal === 'event' && currentModalId) {
+                // Modify event
+                const event = events.find(e => e.id === currentModalId);
+                if (event) {
+                    // Pre-fill the form
+                    document.getElementById('eventTitle').value = event.title;
+                    document.getElementById('eventDescription').value = event.description || '';
+                    document.getElementById('eventDate').value = event.date;
+                    
+                    if (event.time) {
+                        const [hour, minute] = event.time.split(':');
+                        document.getElementById('eventHour').value = hour;
+                        document.getElementById('eventMinute').value = minute;
+                    } else {
+                        document.getElementById('eventHour').value = '';
+                        document.getElementById('eventMinute').value = '';
+                    }
+                    
+                    // Set main category
+                    document.getElementById('eventMainCategory').value = event.mainCategory;
+                    handleMainCategoryChange();
+                    
+                    // Set subcategory if exists
+                    if (event.category.includes('-')) {
+                        const subcategory = event.category.split('-')[1];
+                        setTimeout(() => {
+                            document.getElementById('eventSubcategory').value = subcategory;
+                        }, 100);
+                    }
+                    
+                    // Set recurrence
+                    if (document.getElementById('eventRecurrence')) {
+                        document.getElementById('eventRecurrence').value = event.recurrence || 'none';
+                    }
+                    
+                    // Delete the old event (will create new one on form submit)
+                    events = events.filter(e => e.id !== currentModalId);
+                    saveToLocal();
+                    renderCalendar();
+                    
+                    // Switch to calendar tab and scroll to form
+                    switchTab('calendar');
+                    document.querySelector('#calendarTab .add-item').scrollIntoView({ behavior: 'smooth' });
+                }
+            }
+        }
+        
+        // Calendar Functions
+        function renderCalendar() {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+            document.getElementById('calendarTitle').textContent = `${monthNames[month]} ${year}`;
+            
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            const daysInMonth = lastDay.getDate();
+            const startingDayOfWeek = firstDay.getDay();
+            
+            let calendarHTML = '';
+            
+            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            dayHeaders.forEach(day => {
+                calendarHTML += `<div class="calendar-day-header">${day}</div>`;
+            });
+            
+            const prevMonth = new Date(year, month - 1, 0);
+            const prevMonthDays = prevMonth.getDate();
+            for (let i = startingDayOfWeek - 1; i >= 0; i--) {
+                const day = prevMonthDays - i;
+                calendarHTML += `<div class="calendar-day other-month">
+                    <div class="calendar-day-number">${day}</div>
+                </div>`;
+            }
+            
+            const today = new Date();
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, month, day);
+                const dateString = date.toISOString().split('T')[0];
+                const isToday = date.toDateString() === today.toDateString();
+                
+                const dayEvents = events.filter(e => e.date === dateString);
+                const dayTasks = tasks.filter(t => t.dueDate === dateString);
+                
+                let eventsHTML = '';
+                
+                // Render events with proper category colors
+                dayEvents.forEach(event => {
+                    let eventClass = 'home';
+                    
+                    if (event.category.includes('poubelles-black')) {
+                        eventClass = 'poubelles-black';
+                    } else if (event.category.includes('poubelles-blue-bag')) {
+                        eventClass = 'poubelles-blue-bag';
+                    } else if (event.category.includes('poubelles-blue')) {
+                        eventClass = 'poubelles-blue';
+                    } else if (event.category.includes('poubelles-green')) {
+                        eventClass = 'poubelles-green';
+                    } else if (event.category.includes('gr-yaris')) {
+                        eventClass = 'gr-yaris';
+                    } else if (event.category.includes('street-triple')) {
+                        eventClass = 'street-triple';
+                    } else if (event.category === 'home') {
+                        eventClass = 'home';
+                    } else if (event.category === 'leisure') {
+                        eventClass = 'leisure';
+                    } else if (event.category === 'birthday') {
+                        eventClass = 'birthday';
+                    } else if (event.category === 'other') {
+                        eventClass = 'other';
+                    } else if (event.category === 'poubelles') {
+                        eventClass = 'poubelles';
+                    }
+                    
+                    eventsHTML += `<div class="calendar-event ${eventClass}" onclick="showEventDetails(${event.id})" title="${event.title}">
+                        ${event.time ? event.time + ' ' : ''}${event.title}
+                    </div>`;
+                });
+                
+                // Render tasks
+                dayTasks.forEach(task => {
+                    const isOverdue = new Date(task.dueDate) < today && !task.completed;
+                    const eventClass = task.completed ? 'task' : (isOverdue ? 'overdue' : 'task');
+                    eventsHTML += `<div class="calendar-event ${eventClass}" onclick="showTaskDetails(${task.id})" title="${task.title}">
+                        ${task.completed ? '✓' : '📋'} ${task.title}
+                    </div>`;
+                });
+                
+                calendarHTML += `<div class="calendar-day ${isToday ? 'today' : ''}">
+                    <div class="calendar-day-number">${day}</div>
+                    ${eventsHTML}
+                </div>`;
+            }
+            
+            const remainingCells = 42 - (startingDayOfWeek + daysInMonth);
+            for (let day = 1; day <= remainingCells; day++) {
+                calendarHTML += `<div class="calendar-day other-month">
+                    <div class="calendar-day-number">${day}</div>
+                </div>`;
+            }
+            
+            document.getElementById('calendarGrid').innerHTML = calendarHTML;
+        }
+        
+        function changeMonth(direction) {
+            currentDate.setMonth(currentDate.getMonth() + direction);
+            renderCalendar();
+        }
+        
+        function goToToday() {
+            currentDate = new Date();
+            renderCalendar();
+        }
+        
+        // Category Change Handlers
+        function handleMainCategoryChange() {
+            const mainCategory = document.getElementById('eventMainCategory').value;
+            const subcategorySection = document.getElementById('subcategorySection');
+            const subcategorySelect = document.getElementById('eventSubcategory');
+            const recurrenceSection = document.getElementById('recurrenceSection');
+            const recurrenceSelect = document.getElementById('eventRecurrence');
+            
+            subcategorySection.style.display = 'none';
+            recurrenceSection.style.display = 'block';
+            subcategorySelect.innerHTML = '<option value="none">Select subcategory</option>';
+            
+            // Reset recurrence to none by default
+            recurrenceSelect.value = 'none';
+            
+            if (mainCategory === 'birthday') {
+                // Birthday always has yearly recurrence but hidden
+                recurrenceSection.style.display = 'none';
+                recurrenceSelect.value = 'yearly';
+            } else if (mainCategory === 'poubelles') {
+                subcategorySection.style.display = 'block';
+                subcategorySelect.innerHTML = `
+                    <option value="none">Select subcategory</option>
+                    <option value="black">🗑️ General Waste (Black)</option>
+                    <option value="blue">📄 Paper/Cardboard (Blue)</option>
+                    <option value="green">🍶 Glass (Green)</option>
+                    <option value="blue-bag">🚮 PMC (Blue Bag)</option>
+                `;
+            } else if (mainCategory === 'gr-yaris' || mainCategory === 'street-triple') {
+                subcategorySection.style.display = 'block';
+                subcategorySelect.innerHTML = `
+                    <option value="none">Select subcategory</option>
+                    <option value="controle-technique">🔧 Contrôle Technique</option>
+                    <option value="vignette">🏷️ Vignette</option>
+                    <option value="assurance">🛡️ Assurance</option>
+                    <option value="entretien">⚙️ Entretien</option>
+                    <option value="tyres">🛞 New Tyres</option>
+                    <option value="brake-pads">🔧 New Brake Pads</option>
+                    <option value="other">📦 Other</option>
+                `;
+            }
+        }
+        
+        function handleSubcategoryChange() {
+            const mainCategory = document.getElementById('eventMainCategory').value;
+            const subcategory = document.getElementById('eventSubcategory').value;
+            const titleInput = document.getElementById('eventTitle');
+            const recurrenceSelect = document.getElementById('eventRecurrence');
+            
+            // Auto-populate title if subcategory is selected
+            if (subcategory && subcategory !== 'none') {
+                const categoryNames = {
+                    'gr-yaris': 'GR Yaris',
+                    'street-triple': 'Street Triple'
+                };
+                
+                const subcategoryNames = {
+                    'controle-technique': 'Contrôle Technique',
+                    'vignette': 'Vignette',
+                    'assurance': 'Assurance',
+                    'entretien': 'Entretien',
+                    'tyres': 'New Tyres',
+                    'brake-pads': 'New Brake Pads',
+                    'black': 'General Waste',
+                    'blue': 'Paper/Cardboard',
+                    'green': 'Glass',
+                    'blue-bag': 'PMC',
+                    'other': 'Other'
+                };
+                
+                if (mainCategory === 'poubelles') {
+                    titleInput.value = `Poubelles - ${subcategoryNames[subcategory]}`;
+                } else {
+                    titleInput.value = `${categoryNames[mainCategory]} - ${subcategoryNames[subcategory]}`;
+                }
+                
+                // Set default yearly recurrence for specific subcategories
+                if (['controle-technique', 'vignette', 'assurance'].includes(subcategory)) {
+                    recurrenceSelect.value = 'yearly';
+                }
+            }
+        }
+        
+        // Grocery Functions
+        function addGrocery(event) {
+            event.preventDefault();
+            
+            const item = document.getElementById('groceryItem').value.trim();
+            const category = document.getElementById('groceryCategory').value;
+            
+            if (!item) return;
+            
+            const newGrocery = {
+                id: Date.now(),
+                item,
+                category,
+                completed: false,
+                createdAt: new Date().toISOString()
+            };
+            
+            groceries.push(newGrocery);
+            saveToLocal();
+            renderGroceries();
+            
+            document.getElementById('groceryForm').reset();
+        }
+        
+        function toggleGrocery(id) {
+            const grocery = groceries.find(g => g.id === id);
+            if (grocery) {
+                grocery.completed = !grocery.completed;
+                saveToLocal();
+                renderGroceries();
+            }
+        }
+        
+        function deleteGrocery(id) {
+            if (confirm('Are you sure you want to delete this item?')) {
+                groceries = groceries.filter(g => g.id !== id);
+                saveToLocal();
+                renderGroceries();
+            }
+        }
+        
+        function clearGroceryList() {
+            if (confirm('Are you sure you want to clear all grocery items?')) {
+                groceries = [];
+                saveToLocal();
+                renderGroceries();
+            }
+        }
+        
+        function renderGroceries() {
+            const container = document.getElementById('groceriesContainer');
+            const clearBtn = document.getElementById('clearGroceriesBtn');
+            
+            let filteredGroceries = groceries;
+            if (activeGroceryCategory !== 'all') {
+                filteredGroceries = groceries.filter(grocery => grocery.category === activeGroceryCategory);
+            }
+            
+            if (groceries.length > 0) {
+                clearBtn.style.display = 'inline-block';
+            } else {
+                clearBtn.style.display = 'none';
+            }
+            
+            if (filteredGroceries.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No grocery items${activeGroceryCategory !== 'all' ? ' in this category' : ''}</h3>
+                        <p>Add an item above${activeGroceryCategory !== 'all' ? ' or select a different category' : ''}!</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const sortedGroceries = [...filteredGroceries].sort((a, b) => {
+                if (a.completed !== b.completed) return a.completed ? 1 : -1;
+                if (a.category !== b.category) return (a.category || '').localeCompare(b.category || '');
+                return new Date(a.createdAt) - new Date(b.createdAt);
+            });
+            
+            container.innerHTML = sortedGroceries.map(grocery => {
+                const categoryIcon = getGroceryCategoryIcon(grocery.category);
+                const categoryName = grocery.category ? grocery.category.replace('-', ' ') : 'Uncategorized';
+                
+                return `
+                    <div class="grocery-item ${grocery.completed ? 'completed' : ''}">
+                        <input type="checkbox" class="grocery-checkbox" ${grocery.completed ? 'checked' : ''} 
+                               onchange="toggleGrocery(${grocery.id})">
+                        <div class="grocery-content">
+                            <span class="grocery-name">${grocery.item}</span>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                ${grocery.category ? `<span class="grocery-category-badge">${categoryIcon} ${categoryName}</span>` : ''}
+                                <button class="grocery-delete" onclick="deleteGrocery(${grocery.id})">×</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function getGroceryCategoryIcon(category) {
+            const icons = {
+                'dairy': '🥛',
+                'meat': '🥩',
+                'vegetables': '🥕',
+                'fruits': '🍎',
+                'grains': '🍞',
+                'snacks': '🍿',
+                'beverages': '🥤',
+                'cleaning': '🧽',
+                'personal-care': '🧴',
+                'other': '📦'
+            };
+            return icons[category] || '🛒';
+        }
+        
+        // Filter Functions
+        function filterByCategory(category) {
+            activeCategory = category;
+            
+            document.querySelectorAll('#tasksTab .category-filter').forEach(f => f.classList.remove('active'));
+            document.querySelector(`[data-category="${category}"]`).classList.add('active');
+            
+            renderTasks();
+        }
+        
+        function filterGroceries(category) {
+            activeGroceryCategory = category;
+            
+            document.querySelectorAll('#groceryCategories .category-filter').forEach(f => f.classList.remove('active'));
+            document.querySelector(`[data-grocery-category="${category}"]`).classList.add('active');
+            
+            renderGroceries();
+        }
+        
+        // Event Listeners
+        document.getElementById('taskForm').addEventListener('submit', addTask);
+        document.getElementById('eventForm').addEventListener('submit', addEvent);
+        document.getElementById('groceryForm').addEventListener('submit', addGrocery);
+        
+        document.getElementById('eventMainCategory').addEventListener('change', handleMainCategoryChange);
+        document.getElementById('eventSubcategory').addEventListener('change', handleSubcategoryChange);
+        
+        document.querySelectorAll('#tasksTab .category-filter').forEach(filter => {
+            filter.addEventListener('click', () => {
+                filterByCategory(filter.dataset.category);
+            });
+        });
+        
+        document.querySelectorAll('#groceryCategories .category-filter').forEach(filter => {
+            filter.addEventListener('click', () => {
+                filterGroceries(filter.dataset.groceryCategory);
+            });
+        });
+        
+        // Close modals when clicking outside
+        window.addEventListener('click', (event) => {
+            if (event.target.classList.contains('modal')) {
+                if (event.target.id === 'detailsModal') {
+                    closeModal();
+                } else if (event.target.id === 'conflictModal') {
+                    cancelConflictResolution();
+                }
+            }
+        });
+        
+        // Initialize
+        initializeMSAL();
+        
+        // Set initial state for event form
+        handleMainCategoryChange();
+    </script>
+</body>
+</html>
