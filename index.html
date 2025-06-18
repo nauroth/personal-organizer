@@ -6,8 +6,8 @@
     <title>Personal Organizer</title>
     
     <!-- React and Babel -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
     <!-- MSAL.js for Microsoft Authentication -->
@@ -56,6 +56,48 @@
             min-height: 100vh;
             padding: 20px;
             line-height: 1.6;
+        }
+        
+        /* Loading and Error States */
+        .error-container {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            max-width: 600px;
+            margin: 50px auto;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+        
+        .error-title {
+            color: var(--danger);
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        
+        .error-message {
+            color: var(--dark);
+            margin-bottom: 10px;
+        }
+        
+        .loading-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
         
         .app-container {
@@ -672,77 +714,6 @@
             color: var(--gray);
         }
         
-        /* Loading State */
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: var(--gray);
-        }
-        
-        .loading-spinner {
-            display: inline-block;
-            width: 40px;
-            height: 40px;
-            border: 4px solid var(--border);
-            border-top-color: var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        /* Mobile Responsive */
-        @media (max-width: 768px) {
-            body {
-                padding: 10px;
-            }
-            
-            .app-container {
-                padding: 20px;
-                border-radius: 15px;
-            }
-            
-            .nav-tabs {
-                flex-direction: column;
-            }
-            
-            .form-row, .form-row-3 {
-                grid-template-columns: 1fr;
-            }
-            
-            .stats-grid {
-                grid-template-columns: 1fr 1fr;
-            }
-            
-            .calendar-day {
-                min-height: 80px;
-                padding: 5px;
-            }
-            
-            .calendar-event {
-                font-size: 10px;
-                padding: 1px 4px;
-            }
-            
-            .fab {
-                bottom: 20px;
-                right: 20px;
-                width: 50px;
-                height: 50px;
-                font-size: 20px;
-            }
-            
-            .modal {
-                margin: 10px;
-            }
-            
-            .conflict-preview {
-                grid-template-columns: 1fr;
-            }
-        }
-        
         /* Year View Calendar */
         .year-view {
             display: grid;
@@ -796,7 +767,55 @@
             border-radius: 50%;
         }
         
+        /* Mobile Responsive */
         @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            
+            .app-container {
+                padding: 20px;
+                border-radius: 15px;
+            }
+            
+            .nav-tabs {
+                flex-direction: column;
+            }
+            
+            .form-row, .form-row-3 {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            
+            .calendar-day {
+                min-height: 80px;
+                padding: 5px;
+            }
+            
+            .calendar-event {
+                font-size: 10px;
+                padding: 1px 4px;
+            }
+            
+            .fab {
+                bottom: 20px;
+                right: 20px;
+                width: 50px;
+                height: 50px;
+                font-size: 20px;
+            }
+            
+            .modal {
+                margin: 10px;
+            }
+            
+            .conflict-preview {
+                grid-template-columns: 1fr;
+            }
+            
             .year-view {
                 grid-template-columns: repeat(2, 1fr);
             }
@@ -804,22 +823,102 @@
     </style>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root">
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+        </div>
+    </div>
 
     <script type="text/babel">
+        // Error Boundary Component
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+
+            componentDidCatch(error, errorInfo) {
+                console.error('Error caught by boundary:', error, errorInfo);
+            }
+
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="error-container">
+                            <h1 className="error-title">⚠️ Something went wrong</h1>
+                            <p className="error-message">The application encountered an error.</p>
+                            <p className="error-message">Error: {this.state.error?.message}</p>
+                            <button className="btn" onClick={() => window.location.reload()}>
+                                Reload Page
+                            </button>
+                        </div>
+                    );
+                }
+
+                return this.props.children;
+            }
+        }
+
         const { useState, useEffect, useRef, useCallback } = React;
         
-        // MSAL Configuration
+        // MSAL Configuration - Using demo mode if not configured
+        const USE_DEMO_MODE = true; // Set to false when you have your Azure AD configured
+        
         const msalConfig = {
             auth: {
-                clientId: '427fd9fd-4cba-4121-9a5c-3f11318c2494',
-                authority: 'https://login.microsoftonline.com/consumers',
-                redirectUri: 'https://nauroth.github.io/personal-organizer/'
+                clientId: "YOUR_CLIENT_ID", // Replace with your Azure AD app client ID
+                authority: "https://login.microsoftonline.com/common",
+                redirectUri: window.location.origin
             }
         };
         
-        // Initialize MSAL instance
-        const msalInstance = new msal.PublicClientApplication(msalConfig);
+        // Initialize MSAL instance only if not in demo mode
+        let msalInstance = null;
+        if (!USE_DEMO_MODE && typeof msal !== 'undefined') {
+            try {
+                msalInstance = new msal.PublicClientApplication(msalConfig);
+            } catch (error) {
+                console.error('MSAL initialization error:', error);
+            }
+        }
+        
+        // Demo OneDrive Sync (simulates sync without actual connection)
+        class DemoOneDriveSync {
+            constructor() {
+                this.demoMode = true;
+            }
+            
+            async ensureAppFolder() {
+                return Promise.resolve();
+            }
+            
+            async readFile(filename) {
+                // Simulate reading from OneDrive by using localStorage with a prefix
+                const data = localStorage.getItem(`onedrive_${filename}`);
+                return data ? JSON.parse(data) : null;
+            }
+            
+            async writeFile(filename, data) {
+                // Simulate writing to OneDrive
+                localStorage.setItem(`onedrive_${filename}`, JSON.stringify(data));
+                return true;
+            }
+            
+            async getFileMetadata(filename) {
+                // Simulate file metadata
+                const data = localStorage.getItem(`onedrive_${filename}`);
+                if (data) {
+                    return {
+                        lastModifiedDateTime: localStorage.getItem(`onedrive_${filename}_modified`) || new Date().toISOString()
+                    };
+                }
+                return null;
+            }
+        }
         
         // OneDrive API Helper
         class OneDriveSync {
@@ -830,13 +929,11 @@
             
             async ensureAppFolder() {
                 try {
-                    // Check if folder exists
                     const response = await fetch(`${this.baseUrl}/root:/PersonalOrganizer`, {
                         headers: { 'Authorization': `Bearer ${this.accessToken}` }
                     });
                     
                     if (!response.ok) {
-                        // Create folder if it doesn't exist
                         await fetch(`${this.baseUrl}/root/children`, {
                             method: 'POST',
                             headers: {
@@ -942,10 +1039,8 @@
                 'poubelles-blue-bag': 'event-poubelles-blue-bag'
             };
             
-            // Check for exact match first
             if (categoryMap[category]) return categoryMap[category];
             
-            // Check for partial matches
             for (const [key, value] of Object.entries(categoryMap)) {
                 if (category.includes(key)) return value;
             }
@@ -955,8 +1050,8 @@
         
         // Main App Component
         function PersonalOrganizer() {
-            const [isAuthenticated, setIsAuthenticated] = useState(false);
-            const [account, setAccount] = useState(null);
+            const [isAuthenticated, setIsAuthenticated] = useState(USE_DEMO_MODE);
+            const [account, setAccount] = useState(USE_DEMO_MODE ? { name: 'Demo User' } : null);
             const [activeTab, setActiveTab] = useState('tasks');
             const [tasks, setTasks] = useState([]);
             const [events, setEvents] = useState([]);
@@ -964,9 +1059,9 @@
             const [showAddModal, setShowAddModal] = useState(false);
             const [showDetailsModal, setShowDetailsModal] = useState(false);
             const [selectedItem, setSelectedItem] = useState(null);
-            const [syncStatus, setSyncStatus] = useState('offline'); // offline, syncing, synced, error
+            const [syncStatus, setSyncStatus] = useState('offline');
             const [currentDate, setCurrentDate] = useState(new Date());
-            const [calendarView, setCalendarView] = useState('month'); // month or year
+            const [calendarView, setCalendarView] = useState('month');
             const [oneDriveSync, setOneDriveSync] = useState(null);
             const [showConflictModal, setShowConflictModal] = useState(false);
             const [conflictData, setConflictData] = useState(null);
@@ -985,6 +1080,18 @@
             // Authentication
             useEffect(() => {
                 const initAuth = async () => {
+                    if (USE_DEMO_MODE) {
+                        setOneDriveSync(new DemoOneDriveSync());
+                        setSyncStatus('synced');
+                        loadLocalData();
+                        return;
+                    }
+                    
+                    if (!msalInstance) {
+                        console.error('MSAL not initialized');
+                        return;
+                    }
+                    
                     try {
                         const accounts = await msalInstance.getAllAccounts();
                         if (accounts.length > 0) {
@@ -1000,6 +1107,20 @@
             }, []);
             
             const signIn = async () => {
+                if (USE_DEMO_MODE) {
+                    setIsAuthenticated(true);
+                    setAccount({ name: 'Demo User' });
+                    setOneDriveSync(new DemoOneDriveSync());
+                    setSyncStatus('synced');
+                    loadLocalData();
+                    return;
+                }
+                
+                if (!msalInstance) {
+                    alert('Microsoft authentication is not configured. Please set up Azure AD first.');
+                    return;
+                }
+                
                 try {
                     const loginResponse = await msalInstance.loginPopup({
                         scopes: ["Files.ReadWrite", "User.Read"]
@@ -1013,15 +1134,18 @@
             };
             
             const signOut = () => {
-                msalInstance.logoutPopup();
+                if (!USE_DEMO_MODE && msalInstance) {
+                    msalInstance.logoutPopup();
+                }
                 setIsAuthenticated(false);
                 setAccount(null);
                 setOneDriveSync(null);
-                // Clear local data
                 localStorage.clear();
             };
             
             const acquireTokenAndSync = async () => {
+                if (USE_DEMO_MODE || !msalInstance) return;
+                
                 try {
                     const tokenResponse = await msalInstance.acquireTokenSilent({
                         scopes: ["Files.ReadWrite"],
@@ -1069,13 +1193,13 @@
             };
             
             const performSync = async (sync) => {
+                if (!sync) return;
+                
                 setSyncStatus('syncing');
                 
                 try {
-                    // Get local timestamps
                     const localTimestamp = localStorage.getItem('lastSync') || '0';
                     
-                    // Get remote data and metadata
                     const [remoteTasks, remoteEvents, remoteGroceries] = await Promise.all([
                         sync.readFile('tasks.json'),
                         sync.readFile('events.json'),
@@ -1088,7 +1212,6 @@
                         sync.getFileMetadata('groceries.json')
                     ]);
                     
-                    // Check for conflicts
                     const remoteTimestamp = Math.max(
                         tasksMetadata?.lastModifiedDateTime ? new Date(tasksMetadata.lastModifiedDateTime).getTime() : 0,
                         eventsMetadata?.lastModifiedDateTime ? new Date(eventsMetadata.lastModifiedDateTime).getTime() : 0,
@@ -1096,11 +1219,9 @@
                     );
                     
                     if (remoteTimestamp > parseInt(localTimestamp) && remoteTasks) {
-                        // Potential conflict - check if local has unsaved changes
                         const localHasChanges = localStorage.getItem('hasUnsyncedChanges') === 'true';
                         
                         if (localHasChanges) {
-                            // Show conflict resolution
                             setConflictData({
                                 local: { tasks, events, groceries },
                                 remote: { 
@@ -1113,7 +1234,6 @@
                             setSyncStatus('error');
                             return;
                         } else {
-                            // No local changes, use remote
                             saveLocalData({
                                 tasks: remoteTasks || [],
                                 events: remoteEvents || [],
@@ -1121,7 +1241,6 @@
                             });
                         }
                     } else {
-                        // Local is newer or same, push to remote
                         await Promise.all([
                             sync.writeFile('tasks.json', tasks),
                             sync.writeFile('events.json', events),
@@ -1140,7 +1259,6 @@
             
             const resolveConflict = (useLocal) => {
                 if (useLocal) {
-                    // Keep local version and push to remote
                     if (oneDriveSync) {
                         Promise.all([
                             oneDriveSync.writeFile('tasks.json', tasks),
@@ -1153,7 +1271,6 @@
                         });
                     }
                 } else {
-                    // Use remote version
                     saveLocalData(conflictData.remote);
                     setSyncStatus('synced');
                     localStorage.setItem('lastSync', Date.now().toString());
@@ -1302,7 +1419,7 @@
             }, [oneDriveSync, tasks, events, groceries]);
             
             if (!isAuthenticated) {
-                return <LoginScreen onSignIn={signIn} />;
+                return <LoginScreen onSignIn={signIn} demoMode={USE_DEMO_MODE} />;
             }
             
             return (
@@ -1413,21 +1530,27 @@
         }
         
         // Component: Login Screen
-        function LoginScreen({ onSignIn }) {
+        function LoginScreen({ onSignIn, demoMode }) {
             return (
                 <div className="app-container" style={{ textAlign: 'center', padding: '60px 30px' }}>
                     <h1 style={{ fontSize: '2.5em', marginBottom: '20px', color: '#2c3e50' }}>
                         Personal Organizer
                     </h1>
                     <p style={{ fontSize: '1.2em', color: '#7f8c8d', marginBottom: '40px' }}>
-                        Sign in with your Microsoft account to sync across devices
+                        {demoMode ? 'Click below to start using the app in demo mode' : 'Sign in with your Microsoft account to sync across devices'}
                     </p>
                     <button className="btn" onClick={onSignIn} style={{ fontSize: '18px', padding: '15px 40px' }}>
-                        <i className="fab fa-microsoft"></i> Sign in with Microsoft
+                        {demoMode ? (
+                            <><i className="fas fa-play"></i> Start Demo</>
+                        ) : (
+                            <><i className="fab fa-microsoft"></i> Sign in with Microsoft</>
+                        )}
                     </button>
-                    <p style={{ marginTop: '40px', color: '#95a5a6', fontSize: '14px' }}>
-                        Your data will be stored securely in your OneDrive
-                    </p>
+                    {demoMode && (
+                        <p style={{ marginTop: '40px', color: '#95a5a6', fontSize: '14px' }}>
+                            Demo mode: Your data is stored locally. To enable sync, configure Azure AD.
+                        </p>
+                    )}
                 </div>
             );
         }
@@ -2089,7 +2212,7 @@
                         { value: 'other', label: '📦 Other' }
                     ]);
                 } else {
-                    setShowSubcategory(false;
+                    setShowSubcategory(false);
                     setSubcategoryOptions([]);
                 }
                 
@@ -2411,4 +2534,402 @@
                                                             {i.toString().padStart(2, '0')}
                                                         </option>
                                                     ))}
-                                                </select
+                                                </select>
+                                            </div>
+                                            <div className="form-group">
+                                                <label>Minutes</label>
+                                                <select 
+                                                    value={formData.minute}
+                                                    onChange={(e) => setFormData(prev => ({ ...prev, minute: e.target.value }))}
+                                                >
+                                                    <option value="00">00</option>
+                                                    <option value="15">15</option>
+                                                    <option value="30">30</option>
+                                                    <option value="45">45</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="form-group">
+                                            <label>Main Category</label>
+                                            <select 
+                                                value={formData.mainCategory}
+                                                onChange={(e) => handleMainCategoryChange(e.target.value)}
+                                            >
+                                                <option value="home">🏠 Home</option>
+                                                <option value="leisure">🎯 Leisure</option>
+                                                <option value="gr-yaris">🏎️ GR Yaris</option>
+                                                <option value="street-triple">🏍️ Street Triple</option>
+                                                <option value="birthday">🎂 Birthday</option>
+                                                <option value="poubelles">🗑️ Poubelles</option>
+                                                <option value="other">📦 Other</option>
+                                            </select>
+                                        </div>
+                                        
+                                        {showSubcategory && (
+                                            <div className="form-group">
+                                                <label>Subcategory</label>
+                                                <select 
+                                                    value={formData.subcategory}
+                                                    onChange={(e) => handleSubcategoryChange(e.target.value)}
+                                                >
+                                                    <option value="">Select subcategory</option>
+                                                    {subcategoryOptions.map(option => (
+                                                        <option key={option.value} value={option.value}>
+                                                            {option.label}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+                                        
+                                        {(formData.mainCategory === 'birthday' || 
+                                          ['controle-technique', 'vignette', 'assurance', 'entretien'].includes(formData.subcategory)) && 
+                                          formData.mainCategory !== 'birthday' && (
+                                            <div className="form-group">
+                                                <label>
+                                                    <input 
+                                                        type="checkbox"
+                                                        checked={formData.isRecurring}
+                                                        onChange={(e) => setFormData(prev => ({ ...prev, isRecurring: e.target.checked }))}
+                                                        style={{ width: 'auto', marginRight: '8px' }}
+                                                    />
+                                                    Yearly Recurrence
+                                                </label>
+                                            </div>
+                                        )}
+                                        
+                                        {showAdditionalFields.vignette && (
+                                            <div className="form-group">
+                                                <label>Recurrence Period</label>
+                                                <select 
+                                                    value={formData.recurrenceMonths}
+                                                    onChange={(e) => setFormData(prev => ({ ...prev, recurrenceMonths: parseInt(e.target.value) }))}
+                                                >
+                                                    <option value="12">1 Year</option>
+                                                    <option value="6">6 Months</option>
+                                                </select>
+                                            </div>
+                                        )}
+                                        
+                                        {showAdditionalFields.maintenance && (
+                                            <>
+                                                <h4 style={{ marginTop: '20px', marginBottom: '15px' }}>Maintenance Details</h4>
+                                                <div className="form-group">
+                                                    <label>Mileage (km)</label>
+                                                    <input 
+                                                        type="number"
+                                                        value={formData.maintenanceMileage}
+                                                        onChange={(e) => setFormData(prev => ({ ...prev, maintenanceMileage: e.target.value }))}
+                                                        placeholder="e.g., 25000"
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+                                        
+                                        {showAdditionalFields.tyres && (
+                                            <>
+                                                <h4 style={{ marginTop: '20px', marginBottom: '15px' }}>Tyre Details</h4>
+                                                <div className="form-row-3">
+                                                    <div className="form-group">
+                                                        <label>Brand</label>
+                                                        <input 
+                                                            type="text"
+                                                            value={formData.tyreBrand}
+                                                            onChange={(e) => setFormData(prev => ({ ...prev, tyreBrand: e.target.value }))}
+                                                            placeholder="e.g., Michelin"
+                                                        />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label>Model</label>
+                                                        <input 
+                                                            type="text"
+                                                            value={formData.tyreModel}
+                                                            onChange={(e) => setFormData(prev => ({ ...prev, tyreModel: e.target.value }))}
+                                                            placeholder="e.g., Pilot Sport 4"
+                                                        />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label>Mileage (km)</label>
+                                                        <input 
+                                                            type="number"
+                                                            value={formData.tyreMileage}
+                                                            onChange={(e) => setFormData(prev => ({ ...prev, tyreMileage: e.target.value }))}
+                                                            placeholder="e.g., 45000"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+                                        
+                                        {showAdditionalFields.brakePads && (
+                                            <>
+                                                <h4 style={{ marginTop: '20px', marginBottom: '15px' }}>Brake Pads Details</h4>
+                                                <div className="form-row-3">
+                                                    <div className="form-group">
+                                                        <label>Brand</label>
+                                                        <input 
+                                                            type="text"
+                                                            value={formData.brakeBrand}
+                                                            onChange={(e) => setFormData(prev => ({ ...prev, brakeBrand: e.target.value }))}
+                                                            placeholder="e.g., Brembo"
+                                                        />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label>Model</label>
+                                                        <input 
+                                                            type="text"
+                                                            value={formData.brakeModel}
+                                                            onChange={(e) => setFormData(prev => ({ ...prev, brakeModel: e.target.value }))}
+                                                            placeholder="e.g., DS2500"
+                                                        />
+                                                    </div>
+                                                    <div className="form-group">
+                                                        <label>Mileage (km)</label>
+                                                        <input 
+                                                            type="number"
+                                                            value={formData.brakeMileage}
+                                                            onChange={(e) => setFormData(prev => ({ ...prev, brakeMileage: e.target.value }))}
+                                                            placeholder="e.g., 35000"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+                                    </>
+                                )}
+                                
+                                {formType === 'grocery' && (
+                                    <>
+                                        <div className="form-group">
+                                            <label>Item</label>
+                                            <input 
+                                                type="text" 
+                                                value={formData.item}
+                                                onChange={(e) => setFormData(prev => ({ ...prev, item: e.target.value }))}
+                                                required
+                                                autoFocus
+                                                placeholder="e.g., Milk, Bread, Apples"
+                                            />
+                                        </div>
+                                        
+                                        <div className="form-group">
+                                            <label>Category (optional)</label>
+                                            <select 
+                                                value={formData.groceryCategory}
+                                                onChange={(e) => setFormData(prev => ({ ...prev, groceryCategory: e.target.value }))}
+                                            >
+                                                <option value="">No category</option>
+                                                <option value="dairy">🥛 Dairy</option>
+                                                <option value="meat">🥩 Meat</option>
+                                                <option value="vegetables">🥕 Vegetables</option>
+                                                <option value="fruits">🍎 Fruits</option>
+                                                <option value="grains">🍞 Grains</option>
+                                                <option value="snacks">🍿 Snacks</option>
+                                                <option value="beverages">🥤 Beverages</option>
+                                                <option value="cleaning">🧽 Cleaning</option>
+                                                <option value="personal-care">🧴 Personal Care</option>
+                                                <option value="other">📦 Other</option>
+                                            </select>
+                                        </div>
+                                    </>
+                                )}
+                                
+                                <div className="modal-footer" style={{ marginTop: '20px', paddingTop: '20px' }}>
+                                    <button type="button" className="btn btn-secondary" onClick={onClose}>
+                                        Cancel
+                                    </button>
+                                    <button type="submit" className="btn">
+                                        Add {keepOpen ? 'and Continue' : ''}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Component: Details Modal
+        function DetailsModal({ item, onClose, onModify, onDelete }) {
+            const formatValue = (value) => {
+                if (!value) return 'Not set';
+                return value;
+            };
+            
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">
+                                {item.type === 'task' ? '📋 Task Details' : '📅 Event Details'}
+                            </h2>
+                            <button className="modal-close" onClick={onClose}>×</button>
+                        </div>
+                        
+                        <div className="modal-body">
+                            <h3 style={{ marginBottom: '15px', color: '#2c3e50' }}>{item.title}</h3>
+                            
+                            {item.description && (
+                                <p style={{ marginBottom: '20px', color: '#7f8c8d' }}>{item.description}</p>
+                            )}
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {item.type === 'task' && (
+                                    <>
+                                        <div><strong>Category:</strong> {formatValue(item.category)}</div>
+                                        <div><strong>Priority:</strong> {formatValue(item.priority)}</div>
+                                        <div><strong>Due Date:</strong> {formatValue(formatDateForDisplay(item.dueDate))}</div>
+                                        <div><strong>Status:</strong> {item.completed ? 'Completed' : 'Open'}</div>
+                                        <div><strong>Created:</strong> {formatDateForDisplay(item.createdAt)}</div>
+                                        {item.completedAt && (
+                                            <div><strong>Completed:</strong> {formatDateForDisplay(item.completedAt)}</div>
+                                        )}
+                                    </>
+                                )}
+                                
+                                {item.type === 'event' && (
+                                    <>
+                                        <div><strong>Date:</strong> {formatDateForDisplay(item.date)}</div>
+                                        {item.time && <div><strong>Time:</strong> {item.time}</div>}
+                                        <div><strong>Category:</strong> {formatValue(item.category)}</div>
+                                        {item.isRecurring && (
+                                            <div><strong>Recurrence:</strong> Every {item.recurrenceMonths} months</div>
+                                        )}
+                                        
+                                        {item.additionalData && (
+                                            <>
+                                                {item.additionalData.brand && (
+                                                    <div><strong>Brand:</strong> {item.additionalData.brand}</div>
+                                                )}
+                                                {item.additionalData.model && (
+                                                    <div><strong>Model:</strong> {item.additionalData.model}</div>
+                                                )}
+                                                {item.additionalData.mileage && (
+                                                    <div><strong>Mileage:</strong> {item.additionalData.mileage} km</div>
+                                                )}
+                                            </>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                        
+                        <div className="modal-footer">
+                            <button className="btn btn-secondary" onClick={onClose}>
+                                Close
+                            </button>
+                            <button className="btn" onClick={onModify}>
+                                Modify
+                            </button>
+                            <button className="btn btn-danger" onClick={() => {
+                                if (confirm('Are you sure you want to delete this item?')) {
+                                    onDelete();
+                                }
+                            }}>
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Component: Conflict Modal
+        function ConflictModal({ localData, remoteData, onResolve }) {
+            const [selectedVersion, setSelectedVersion] = useState('local');
+            
+            const countItems = (data) => {
+                return {
+                    tasks: data.tasks?.length || 0,
+                    events: data.events?.length || 0,
+                    groceries: data.groceries?.length || 0
+                };
+            };
+            
+            const localCount = countItems(localData);
+            const remoteCount = countItems(remoteData);
+            
+            return (
+                <div className="modal-overlay">
+                    <div className="modal">
+                        <div className="modal-header">
+                            <h2 className="modal-title">⚠️ Sync Conflict Detected</h2>
+                        </div>
+                        
+                        <div className="modal-body">
+                            <p style={{ marginBottom: '20px' }}>
+                                Your local data conflicts with the data stored in OneDrive. 
+                                Please choose which version to keep:
+                            </p>
+                            
+                            <div className="conflict-preview">
+                                <div 
+                                    className={`conflict-version ${selectedVersion === 'local' ? 'selected' : ''}`}
+                                    onClick={() => setSelectedVersion('local')}
+                                    style={{ cursor: 'pointer' }}
+                                >
+                                    <h4>📱 Local Version (This Device)</h4>
+                                    <div style={{ fontSize: '14px', marginTop: '10px' }}>
+                                        <div>Tasks: {localCount.tasks}</div>
+                                        <div>Events: {localCount.events}</div>
+                                        <div>Groceries: {localCount.groceries}</div>
+                                    </div>
+                                </div>
+                                
+                                <div 
+                                    className={`conflict-version ${selectedVersion === 'remote' ? 'selected' : ''}`}
+                                    onClick={() => setSelectedVersion('remote')}
+                                    style={{ cursor: 'pointer' }}
+                                >
+                                    <h4>☁️ OneDrive Version</h4>
+                                    <div style={{ fontSize: '14px', marginTop: '10px' }}>
+                                        <div>Tasks: {remoteCount.tasks}</div>
+                                        <div>Events: {remoteCount.events}</div>
+                                        <div>Groceries: {remoteCount.groceries}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <p style={{ marginTop: '20px', fontSize: '14px', color: '#7f8c8d' }}>
+                                ⚠️ The version you don't choose will be overwritten.
+                            </p>
+                        </div>
+                        
+                        <div className="modal-footer">
+                            <button 
+                                className="btn"
+                                onClick={() => onResolve(selectedVersion === 'local')}
+                            >
+                                Use {selectedVersion === 'local' ? 'Local' : 'OneDrive'} Version
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Render the app with error boundary
+        try {
+            ReactDOM.render(
+                <ErrorBoundary>
+                    <PersonalOrganizer />
+                </ErrorBoundary>, 
+                document.getElementById('root')
+            );
+        } catch (error) {
+            console.error('Failed to render app:', error);
+            document.getElementById('root').innerHTML = `
+                <div class="error-container">
+                    <h1 class="error-title">⚠️ Failed to load application</h1>
+                    <p class="error-message">Error: ${error.message}</p>
+                    <p class="error-message">Please check the browser console for more details.</p>
+                    <button class="btn" onclick="window.location.reload()">
+                        Reload Page
+                    </button>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
