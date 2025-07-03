@@ -1232,95 +1232,165 @@ const formatDateForDisplay = (dateString) => {
                 }
             };
             
-            const performSync = async (sync) => {
-                if (!sync) return;
+		const performSync = async (sync) => {
+    if (!sync) return;
+    
+    setSyncStatus('syncing');
+    
+    try {
+        // First, create a backup of current data
+        const backupTimestamp = Date.now();
+        localStorage.setItem(`backup_tasks_${backupTimestamp}`, JSON.stringify(tasks));
+        localStorage.setItem(`backup_events_${backupTimestamp}`, JSON.stringify(events));
+        localStorage.setItem(`backup_groceries_${backupTimestamp}`, JSON.stringify(groceries));
+        
+        // Clean old backups (keep last 5)
+        const backupKeys = Object.keys(localStorage).filter(key => key.startsWith('backup_'));
+        if (backupKeys.length > 15) { // 5 backups × 3 types
+            backupKeys.sort().slice(0, -15).forEach(key => localStorage.removeItem(key));
+        }
+        
+        // Get remote data
+        const [remoteTasks, remoteEvents, remoteGroceries] = await Promise.all([
+            sync.readFile('tasks.json'),
+            sync.readFile('events.json'),
+            sync.readFile('groceries.json')
+        ]);
+        
+        // Get metadata
+        const [tasksMetadata, eventsMetadata, groceriesMetadata] = await Promise.all([
+            sync.getFileMetadata('tasks.json'),
+            sync.getFileMetadata('events.json'),
+            sync.getFileMetadata('groceries.json')
+        ]);
+        
+        const lastSyncTime = parseInt(localStorage.getItem('lastSync') || '0');
+        const remoteTimestamp = Math.max(
+            tasksMetadata?.lastModifiedDateTime ? new Date(tasksMetadata.lastModifiedDateTime).getTime() : 0,
+            eventsMetadata?.lastModifiedDateTime ? new Date(eventsMetadata.lastModifiedDateTime).getTime() : 0,
+            groceriesMetadata?.lastModifiedDateTime ? new Date(groceriesMetadata.lastModifiedDateTime).getTime() : 0
+        );
+        
+        // Data validation helper
+        const isValidData = (data) => {
+            return data !== null && data !== undefined && Array.isArray(data);
+        };
+        
+        // Check if we need to sync
+        if (remoteTimestamp > lastSyncTime && (remoteTasks || remoteEvents || remoteGroceries)) {
+            // Remote is newer
+            const hasLocalChanges = localStorage.getItem('lastLocalChange');
+            const lastLocalChange = hasLocalChanges ? parseInt(hasLocalChanges) : 0;
+            
+            // Only show conflict if local was modified after last sync
+            if (lastLocalChange > lastSyncTime) {
+                // Check if data is actually different
+                const localDataStr = JSON.stringify({ tasks, events, groceries });
+                const remoteDataStr = JSON.stringify({ 
+                    tasks: remoteTasks || [], 
+                    events: remoteEvents || [], 
+                    groceries: remoteGroceries || [] 
+                });
                 
-                setSyncStatus('syncing');
-                
-                try {
-                    const localTimestamp = localStorage.getItem('lastSync') || '0';
-                    
-                    const [remoteTasks, remoteEvents, remoteGroceries] = await Promise.all([
-                        sync.readFile('tasks.json'),
-                        sync.readFile('events.json'),
-                        sync.readFile('groceries.json')
-                    ]);
-                    
-                    const [tasksMetadata, eventsMetadata, groceriesMetadata] = await Promise.all([
-                        sync.getFileMetadata('tasks.json'),
-                        sync.getFileMetadata('events.json'),
-                        sync.getFileMetadata('groceries.json')
-                    ]);
-                    
-                    const remoteTimestamp = Math.max(
-                        tasksMetadata?.lastModifiedDateTime ? new Date(tasksMetadata.lastModifiedDateTime).getTime() : 0,
-                        eventsMetadata?.lastModifiedDateTime ? new Date(eventsMetadata.lastModifiedDateTime).getTime() : 0,
-                        groceriesMetadata?.lastModifiedDateTime ? new Date(groceriesMetadata.lastModifiedDateTime).getTime() : 0
-                    );
-                    
-                    if (remoteTimestamp > parseInt(localTimestamp) && remoteTasks) {
-                        const localHasChanges = localStorage.getItem('hasUnsyncedChanges') === 'true';
-                        
-                        if (localHasChanges) {
-                            setConflictData({
-                                local: { tasks, events, groceries },
-                                remote: { 
-                                    tasks: remoteTasks || [], 
-                                    events: remoteEvents || [], 
-                                    groceries: remoteGroceries || [] 
-                                }
-                            });
-                            setShowConflictModal(true);
-                            setSyncStatus('error');
-                            return;
-                        } else {
-                            saveLocalData({
-                                tasks: remoteTasks || [],
-                                events: remoteEvents || [],
-                                groceries: remoteGroceries || []
-                            });
+                if (localDataStr !== remoteDataStr) {
+                    // Real conflict - show dialog
+                    setConflictData({
+                        local: { tasks, events, groceries },
+                        remote: { 
+                            tasks: remoteTasks || [], 
+                            events: remoteEvents || [], 
+                            groceries: remoteGroceries || [] 
                         }
-                    } else {
-                        await Promise.all([
-                            sync.writeFile('tasks.json', tasks),
-                            sync.writeFile('events.json', events),
-                            sync.writeFile('groceries.json', groceries)
-                        ]);
-                    }
-                    
-                    localStorage.setItem('lastSync', Date.now().toString());
-                    localStorage.setItem('hasUnsyncedChanges', 'false');
-                    setSyncStatus('synced');
-                } catch (error) {
-                    console.error('Sync error:', error);
+                    });
+                    setShowConflictModal(true);
                     setSyncStatus('error');
+                    return;
                 }
-            };
-            
-            const resolveConflict = (useLocal) => {
-                if (useLocal) {
-                    if (oneDriveSync) {
-                        Promise.all([
-                            oneDriveSync.writeFile('tasks.json', tasks),
-                            oneDriveSync.writeFile('events.json', events),
-                            oneDriveSync.writeFile('groceries.json', groceries)
-                        ]).then(() => {
-                            setSyncStatus('synced');
-                            localStorage.setItem('lastSync', Date.now().toString());
-                            localStorage.setItem('hasUnsyncedChanges', 'false');
-                        });
-                    }
-                } else {
-                    saveLocalData(conflictData.remote);
-                    setSyncStatus('synced');
-                    localStorage.setItem('lastSync', Date.now().toString());
-                    localStorage.setItem('hasUnsyncedChanges', 'false');
+            } else {
+                // No local changes, safe to use remote
+                if (isValidData(remoteTasks)) {
+                    saveLocalData({ tasks: remoteTasks });
                 }
-                
-                setShowConflictModal(false);
-                setConflictData(null);
-            };
+                if (isValidData(remoteEvents)) {
+                    saveLocalData({ events: remoteEvents });
+                }
+                if (isValidData(remoteGroceries)) {
+                    saveLocalData({ groceries: remoteGroceries });
+                }
+            }
+        } else {
+            // Local is newer or same, upload to remote
+            await Promise.all([
+                sync.writeFile('tasks.json', tasks),
+                sync.writeFile('events.json', events),
+                sync.writeFile('groceries.json', groceries)
+            ]);
+        }
+        
+        localStorage.setItem('lastSync', Date.now().toString());
+        localStorage.removeItem('lastLocalChange');
+        setSyncStatus('synced');
+    } catch (error) {
+        console.error('Sync error:', error);
+        setSyncStatus('error');
+    }
+};
             
+		const resolveConflict = (useLocal) => {
+    if (useLocal) {
+        if (oneDriveSync) {
+            Promise.all([
+                oneDriveSync.writeFile('tasks.json', tasks),
+                oneDriveSync.writeFile('events.json', events),
+                oneDriveSync.writeFile('groceries.json', groceries)
+            ]).then(() => {
+                setSyncStatus('synced');
+                localStorage.setItem('lastSync', Date.now().toString());
+                localStorage.removeItem('lastLocalChange');
+            });
+        }
+    } else {
+        // Validate remote data before saving
+        if (conflictData.remote.tasks && Array.isArray(conflictData.remote.tasks)) {
+            saveLocalData({ tasks: conflictData.remote.tasks });
+        }
+        if (conflictData.remote.events && Array.isArray(conflictData.remote.events)) {
+            saveLocalData({ events: conflictData.remote.events });
+        }
+        if (conflictData.remote.groceries && Array.isArray(conflictData.remote.groceries)) {
+            saveLocalData({ groceries: conflictData.remote.groceries });
+        }
+        setSyncStatus('synced');
+        localStorage.setItem('lastSync', Date.now().toString());
+        localStorage.removeItem('lastLocalChange');
+    }
+    
+    setShowConflictModal(false);
+    setConflictData(null);
+};
+
+
+		const restoreFromBackup = () => {
+    const backupKeys = Object.keys(localStorage)
+        .filter(key => key.startsWith('backup_'))
+        .sort()
+        .reverse();
+    
+    if (backupKeys.length >= 3) {
+        const latestTimestamp = backupKeys[0].split('_')[2];
+        const backupTasks = localStorage.getItem(`backup_tasks_${latestTimestamp}`);
+        const backupEvents = localStorage.getItem(`backup_events_${latestTimestamp}`);
+        const backupGroceries = localStorage.getItem(`backup_groceries_${latestTimestamp}`);
+        
+        if (backupTasks) saveLocalData({ tasks: JSON.parse(backupTasks) });
+        if (backupEvents) saveLocalData({ events: JSON.parse(backupEvents) });
+        if (backupGroceries) saveLocalData({ groceries: JSON.parse(backupGroceries) });
+        
+        alert('Data restored from backup!');
+    }
+};
+
+		
             // CRUD Operations
             const addTask = (taskData) => {
                 const newTask = {
