@@ -2064,7 +2064,7 @@
                     const date = new Date(year, month, day);
                     const dateStr = date.toISOString().split('T')[0];
                     const hasEvents = events.some(e => e.date === dateStr) || tasks.some(t => t.dueDate === dateStr);
-                    const isToday: `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}` === todayDateStr,
+                    const isToday = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}` === todayDateStr,
                     
                     days.push({ day, hasEvents, isToday });
                 }
