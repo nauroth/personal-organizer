@@ -1042,12 +1042,17 @@
 			return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
 		};
 		
-        const formatDateForDisplay = (dateString) => {
-			if (!dateString) return '';
-		// Parse the date components directly to avoid timezone issues
-			const [year, month, day] = dateString.split('-');
-			return `${day}/${month}/${year}`;
-		};
+const formatDateForDisplay = (dateString) => {
+    if (!dateString) return '';
+    
+    // If it's a timestamp (contains 'T'), extract just the date part
+    if (dateString.includes('T')) {
+        dateString = dateString.split('T')[0];
+    }
+    
+    const [year, month, day] = dateString.split('-');
+    return `${day}/${month}/${year}`;
+};
         
         const parseDisplayDate = (displayDate) => {
             if (!displayDate) return '';
@@ -1999,7 +2004,7 @@
                         <div key={header} className="calendar-day-header">{header}</div>
                     ))}
                     {days.map((dayInfo, index) => {
-                        const dateStr = dayInfo.date.toISOString().split('T')[0];
+                        const dateStr = `${dayInfo.date.getFullYear()}-${(dayInfo.date.getMonth() + 1).toString().padStart(2, '0')}-${dayInfo.date.getDate().toString().padStart(2, '0')}`;
                         const dayEvents = events.filter(e => e.date === dateStr);
                         const dayTasks = tasks.filter(t => t.dueDate === dateStr);
                         
