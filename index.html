@@ -395,6 +395,24 @@
             margin-top: 5px;
         }
         
+        /* Task Status Dropdown */
+        .task-filter-dropdown {
+            position: relative;
+            margin-bottom: 20px;
+        }
+        
+        .task-filter-select {
+            width: 200px;
+            padding: 10px 15px;
+            border: 2px solid var(--border);
+            border-radius: 10px;
+            background: white;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--dark);
+            cursor: pointer;
+        }
+        
         /* Task Cards */
         .task-section {
             margin-bottom: 30px;
@@ -819,6 +837,10 @@
             .year-view {
                 grid-template-columns: repeat(2, 1fr);
             }
+            
+            .task-filter-select {
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -866,14 +888,20 @@
         const { useState, useEffect, useRef, useCallback } = React;
         
         // MSAL Configuration - Using demo mode if not configured
-        const USE_DEMO_MODE = true; // Set to false when you have your Azure AD configured
+        const USE_DEMO_MODE = false; // Set to false when you have your Azure AD configured
         
         const msalConfig = {
+
+
             auth: {
-                clientId: "YOUR_CLIENT_ID", // Replace with your Azure AD app client ID
-                authority: "https://login.microsoftonline.com/common",
-                redirectUri: window.location.origin
-            }
+
+                clientId: '427fd9fd-4cba-4121-9a5c-3f11318c2494', // Replace with your app's client ID from Azure
+
+                authority: 'https://login.microsoftonline.com/consumers', // For personal accounts
+
+                redirectUri: 'https://nauroth.github.io/personal-organizer/' // Github page URL
+
+            },
         };
         
         // Initialize MSAL instance only if not in demo mode
@@ -1007,14 +1035,19 @@
         }
         
         // Utility Functions
+		
+		const createLocalDate = (dateString) => {
+			if (!dateString) return null;
+			const [year, month, day] = dateString.split('-');
+			return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+		};
+		
         const formatDateForDisplay = (dateString) => {
-            if (!dateString) return '';
-            const date = new Date(dateString);
-            const day = date.getDate().toString().padStart(2, '0');
-            const month = (date.getMonth() + 1).toString().padStart(2, '0');
-            const year = date.getFullYear();
-            return `${day}/${month}/${year}`;
-        };
+			if (!dateString) return '';
+		// Parse the date components directly to avoid timezone issues
+			const [year, month, day] = dateString.split('-');
+			return `${day}/${month}/${year}`;
+		};
         
         const parseDisplayDate = (displayDate) => {
             if (!displayDate) return '';
@@ -1059,6 +1092,7 @@
             const [showAddModal, setShowAddModal] = useState(false);
             const [showDetailsModal, setShowDetailsModal] = useState(false);
             const [selectedItem, setSelectedItem] = useState(null);
+            const [isModifying, setIsModifying] = useState(false);
             const [syncStatus, setSyncStatus] = useState('offline');
             const [currentDate, setCurrentDate] = useState(new Date());
             const [calendarView, setCalendarView] = useState('month');
@@ -1069,6 +1103,7 @@
                 tasks: 'all',
                 groceries: 'all'
             });
+            const [taskStatusFilter, setTaskStatusFilter] = useState('open'); // New state for task status filter
             
             // Form States
             const [lastUsedCategories, setLastUsedCategories] = useState({
@@ -1295,6 +1330,14 @@
                 localStorage.setItem('hasUnsyncedChanges', 'true');
                 setLastUsedCategories(prev => ({ ...prev, task: taskData.category }));
             };
+
+            const updateTask = (taskId, taskData) => {
+                const updatedTasks = tasks.map(task => 
+                    task.id === taskId ? { ...task, ...taskData } : task
+                );
+                saveLocalData({ tasks: updatedTasks });
+                localStorage.setItem('hasUnsyncedChanges', 'true');
+            };
             
             const addEvent = (eventData) => {
                 const newEvent = {
@@ -1307,7 +1350,8 @@
                 
                 // Handle recurring events
                 if (eventData.isRecurring && eventData.recurrenceMonths) {
-                    const baseDate = new Date(eventData.date);
+                    const [year, month, day] = eventData.date.split('-');
+					const baseDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
                     for (let i = 1; i <= 70; i++) {
                         const futureDate = new Date(baseDate);
                         futureDate.setMonth(futureDate.getMonth() + (eventData.recurrenceMonths * i));
@@ -1326,6 +1370,43 @@
                 saveLocalData({ events: updatedEvents });
                 localStorage.setItem('hasUnsyncedChanges', 'true');
                 setLastUsedCategories(prev => ({ ...prev, event: eventData.category.split('-')[0] }));
+            };
+
+            const updateEvent = (eventId, eventData) => {
+                // Remove old event and its recurrences
+                let updatedEvents = events.filter(event => 
+                    event.id !== eventId && event.parentEventId !== eventId
+                );
+                
+                // Add updated event
+                const updatedEvent = {
+                    ...eventData,
+                    id: eventId,
+                    createdAt: events.find(e => e.id === eventId)?.createdAt || new Date().toISOString()
+                };
+                
+                updatedEvents.push(updatedEvent);
+                
+                // Handle recurring events
+                if (eventData.isRecurring && eventData.recurrenceMonths) {
+                    const baseDate = createLocalDate(eventData.date);
+                    for (let i = 1; i <= 70; i++) {
+                        const futureDate = new Date(baseDate);
+                        futureDate.setMonth(futureDate.getMonth() + (eventData.recurrenceMonths * i));
+                        
+                        const recurringEvent = {
+                            ...updatedEvent,
+                            id: Date.now() + i,
+                            date: futureDate.toISOString().split('T')[0],
+                            parentEventId: eventId
+                        };
+                        
+                        updatedEvents.push(recurringEvent);
+                    }
+                }
+                
+                saveLocalData({ events: updatedEvents });
+                localStorage.setItem('hasUnsyncedChanges', 'true');
             };
             
             const addGrocery = (groceryData) => {
@@ -1439,6 +1520,8 @@
                                 setSelectedItem(task);
                                 setShowDetailsModal(true);
                             }}
+                            taskStatusFilter={taskStatusFilter}
+                            onStatusFilterChange={setTaskStatusFilter}
                         />
                     )}
                     
@@ -1479,12 +1562,18 @@
                     {showAddModal && (
                         <AddModal
                             activeTab={activeTab}
-                            onClose={() => setShowAddModal(false)}
-                            onAddTask={addTask}
-                            onAddEvent={addEvent}
+                            onClose={() => {
+                                setShowAddModal(false);
+                                setSelectedItem(null);
+                                setIsModifying(false);
+                            }}
+                            onAddTask={isModifying ? (data) => updateTask(selectedItem.id, data) : addTask}
+                            onAddEvent={isModifying ? (data) => updateEvent(selectedItem.id, data) : addEvent}
                             onAddGrocery={addGrocery}
                             lastUsedCategories={lastUsedCategories}
                             preselectedDate={selectedItem?.date}
+                            existingData={isModifying ? selectedItem : null}
+                            isModifying={isModifying}
                             keepOpen={true}
                         />
                     )}
@@ -1498,6 +1587,7 @@
                             }}
                             onModify={() => {
                                 setShowDetailsModal(false);
+                                setIsModifying(true);
                                 setShowAddModal(true);
                             }}
                             onDelete={() => {
@@ -1597,21 +1687,27 @@
         }
         
         // Component: Tasks Tab
-        function TasksTab({ tasks, onToggleTask, onDeleteTask, activeFilter, onFilterChange, onTaskClick }) {
-            const filteredTasks = activeFilter === 'all' 
+        function TasksTab({ tasks, onToggleTask, onDeleteTask, activeFilter, onFilterChange, onTaskClick, taskStatusFilter, onStatusFilterChange }) {
+            // Filter by category first
+            let filteredTasks = activeFilter === 'all' 
                 ? tasks 
                 : tasks.filter(task => task.category === activeFilter);
             
-            const openTasks = filteredTasks.filter(task => !task.completed);
-            const completedTasks = filteredTasks.filter(task => task.completed);
+            // Then filter by status
+            if (taskStatusFilter === 'open') {
+                filteredTasks = filteredTasks.filter(task => !task.completed);
+            } else if (taskStatusFilter === 'completed') {
+                filteredTasks = filteredTasks.filter(task => task.completed);
+            }
+            // 'all' shows everything
             
             const stats = {
                 total: tasks.length,
                 completed: tasks.filter(t => t.completed).length,
-                overdue: tasks.filter(t => !t.completed && t.dueDate && new Date(t.dueDate) < new Date()).length,
+                overdue: tasks.filter(t => !t.completed && t.dueDate && createLocalDate(t.dueDate) < new Date()).length,
                 upcoming: tasks.filter(t => {
                     if (!t.dueDate || t.completed) return false;
-                    const dueDate = new Date(t.dueDate);
+                    const dueDate = createLocalDate(t.dueDate);
                     const weekFromNow = new Date();
                     weekFromNow.setDate(weekFromNow.getDate() + 7);
                     return dueDate >= new Date() && dueDate <= weekFromNow;
@@ -1637,6 +1733,19 @@
                             <div className="stat-number">{stats.upcoming}</div>
                             <div className="stat-label">Due This Week</div>
                         </div>
+                    </div>
+                    
+                    {/* Status Filter Dropdown */}
+                    <div className="task-filter-dropdown">
+                        <select 
+                            className="task-filter-select"
+                            value={taskStatusFilter}
+                            onChange={(e) => onStatusFilterChange(e.target.value)}
+                        >
+                            <option value="open">Open Tasks</option>
+                            <option value="all">All Tasks</option>
+                            <option value="completed">Completed Tasks</option>
+                        </select>
                     </div>
                     
                     <div className="category-filters">
@@ -1673,46 +1782,33 @@
                     </div>
                     
                     <div className="task-section">
-                        <div className="section-header">
-                            <h2 className="section-title">Open Tasks ({openTasks.length})</h2>
-                        </div>
-                        {openTasks.length === 0 ? (
+                        {filteredTasks.length === 0 ? (
                             <div className="empty-state">
-                                <h3>No open tasks</h3>
-                                <p>All caught up!</p>
+                                <h3>No tasks found</h3>
+                                <p>Try changing your filters or add a new task</p>
                             </div>
                         ) : (
-                            openTasks.map(task => (
-                                <TaskCard 
-                                    key={task.id} 
-                                    task={task} 
-                                    onToggle={() => onToggleTask(task.id)}
-                                    onDelete={() => onDeleteTask(task.id)}
-                                    onClick={() => onTaskClick({ ...task, type: 'task' })}
-                                />
-                            ))
-                        )}
-                    </div>
-                    
-                    <div className="task-section">
-                        <div className="section-header">
-                            <h2 className="section-title">Completed Tasks ({completedTasks.length})</h2>
-                        </div>
-                        {completedTasks.length === 0 ? (
-                            <div className="empty-state">
-                                <h3>No completed tasks</h3>
-                                <p>Complete some tasks to see them here!</p>
-                            </div>
-                        ) : (
-                            completedTasks.map(task => (
-                                <TaskCard 
-                                    key={task.id} 
-                                    task={task} 
-                                    onToggle={() => onToggleTask(task.id)}
-                                    onDelete={() => onDeleteTask(task.id)}
-                                    onClick={() => onTaskClick({ ...task, type: 'task' })}
-                                />
-                            ))
+                            filteredTasks
+                                .sort((a, b) => {
+                                    // Sort by completion status first
+                                    if (a.completed !== b.completed) {
+                                        return a.completed ? 1 : -1;
+                                    }
+                                    // Then by due date
+                                    if (a.dueDate && b.dueDate) {
+                                        return new Date(a.dueDate) - new Date(b.dueDate);
+                                    }
+                                    return 0;
+                                })
+                                .map(task => (
+                                    <TaskCard 
+                                        key={task.id} 
+                                        task={task} 
+                                        onToggle={() => onToggleTask(task.id)}
+                                        onDelete={() => onDeleteTask(task.id)}
+                                        onClick={() => onTaskClick({ ...task, type: 'task' })}
+                                    />
+                                ))
                         )}
                     </div>
                 </div>
@@ -1721,7 +1817,7 @@
         
         // Component: Task Card
         function TaskCard({ task, onToggle, onDelete, onClick }) {
-            const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && !task.completed;
+            const isOverdue = task.dueDate && createLocalDate(task.dueDate) < new Date() && !task.completed;
             
             const getCategoryIcon = (category) => {
                 const icons = {
@@ -1854,11 +1950,14 @@
             const firstDay = new Date(year, month, 1);
             const lastDay = new Date(year, month + 1, 0);
             const daysInMonth = lastDay.getDate();
-            const startingDayOfWeek = firstDay.getDay();
-            const adjustedStartDay = startingDayOfWeek === 0 ? 6 : startingDayOfWeek - 1;
+            
+            // Get the day of week for the first day (0 = Sunday, 1 = Monday, etc.)
+            const firstDayOfWeek = firstDay.getDay();
+            // Adjust to start week on Monday (0 = Monday, 6 = Sunday)
+            const adjustedStartDay = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1;
             
             const days = [];
-            const dayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const dayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // Start with Monday
             
             // Previous month's trailing days
             const prevMonth = new Date(year, month - 1, 0);
@@ -1873,12 +1972,13 @@
             
             // Current month days
             const today = new Date();
+			const todayDateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
             for (let day = 1; day <= daysInMonth; day++) {
                 const date = new Date(year, month, day);
                 days.push({
                     day,
                     isOtherMonth: false,
-                    isToday: date.toDateString() === today.toDateString(),
+                    isToday: `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}` === todayDateStr,
                     date
                 });
             }
@@ -1944,8 +2044,11 @@
                 const firstDay = new Date(year, month, 1);
                 const lastDay = new Date(year, month + 1, 0);
                 const daysInMonth = lastDay.getDate();
-                const startingDayOfWeek = firstDay.getDay();
-                const adjustedStartDay = startingDayOfWeek === 0 ? 6 : startingDayOfWeek - 1;
+                
+                // Get the day of week for the first day (0 = Sunday, 1 = Monday, etc.)
+                const firstDayOfWeek = firstDay.getDay();
+                // Adjust to start week on Monday (0 = Monday, 6 = Sunday)
+                const adjustedStartDay = firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1;
                 
                 const days = [];
                 
@@ -1956,11 +2059,12 @@
                 
                 // Add month days
                 const today = new Date();
+				const todayDateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
                 for (let day = 1; day <= daysInMonth; day++) {
                     const date = new Date(year, month, day);
                     const dateStr = date.toISOString().split('T')[0];
                     const hasEvents = events.some(e => e.date === dateStr) || tasks.some(t => t.dueDate === dateStr);
-                    const isToday = date.toDateString() === today.toDateString();
+                    const isToday: `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}` === todayDateStr,
                     
                     days.push({ day, hasEvents, isToday });
                 }
@@ -2141,43 +2245,123 @@
         }
         
         // Component: Add Modal
-        function AddModal({ activeTab, onClose, onAddTask, onAddEvent, onAddGrocery, lastUsedCategories, preselectedDate, keepOpen }) {
+        function AddModal({ activeTab, onClose, onAddTask, onAddEvent, onAddGrocery, lastUsedCategories, preselectedDate, existingData, isModifying, keepOpen }) {
             const [formType, setFormType] = useState(
-                activeTab === 'tasks' ? 'task' : 
+                existingData?.type || 
+                (activeTab === 'tasks' ? 'task' : 
                 activeTab === 'calendar' ? 'event' : 
-                'grocery'
+                'grocery')
             );
             
-            const [formData, setFormData] = useState({
-                // Task fields
-                title: '',
-                description: '',
-                category: lastUsedCategories[formType] || 'home',
-                dueDate: '',
-                priority: 'medium',
+            // Initialize form data with existing data if modifying
+            const [formData, setFormData] = useState(() => {
+                if (isModifying && existingData) {
+                    if (existingData.type === 'task') {
+                        return {
+                            title: existingData.title || '',
+                            description: existingData.description || '',
+                            category: existingData.category || 'home',
+                            dueDate: existingData.dueDate ? formatDateForDisplay(existingData.dueDate) : '',
+                            priority: existingData.priority || 'medium',
+                            // Event fields empty
+                            date: '',
+                            time: '',
+                            hour: '',
+                            minute: '00',
+                            mainCategory: 'home',
+                            subcategory: '',
+                            isRecurring: false,
+                            recurrenceMonths: 12,
+                            tyreBrand: '',
+                            tyreModel: '',
+                            tyreMileage: '',
+                            brakeBrand: '',
+                            brakeModel: '',
+                            brakeMileage: '',
+                            maintenanceMileage: '',
+                            // Grocery fields empty
+                            item: '',
+                            groceryCategory: ''
+                        };
+                    } else if (existingData.type === 'event') {
+                        // Parse time if exists
+                        let hour = '';
+                        let minute = '00';
+                        if (existingData.time) {
+                            const [h, m] = existingData.time.split(':');
+                            hour = h || '';
+                            minute = m || '00';
+                        }
+                        
+                        // Parse category
+                        let mainCategory = existingData.mainCategory || existingData.category || 'home';
+                        let subcategory = '';
+                        if (existingData.category && existingData.category.includes('-')) {
+                            const parts = existingData.category.split('-');
+                            mainCategory = parts[0];
+                            subcategory = parts.slice(1).join('-');
+                        }
+                        
+                        return {
+                            // Task fields empty
+                            title: existingData.title || '',
+                            description: existingData.description || '',
+                            category: 'home',
+                            dueDate: '',
+                            priority: 'medium',
+                            // Event fields
+                            date: existingData.date ? formatDateForDisplay(existingData.date) : '',
+                            time: existingData.time || '',
+                            hour,
+                            minute,
+                            mainCategory,
+                            subcategory,
+                            isRecurring: existingData.isRecurring || false,
+                            recurrenceMonths: existingData.recurrenceMonths || 12,
+                            // Additional data
+                            tyreBrand: existingData.additionalData?.brand || '',
+                            tyreModel: existingData.additionalData?.model || '',
+                            tyreMileage: existingData.additionalData?.mileage || '',
+                            brakeBrand: existingData.additionalData?.brand || '',
+                            brakeModel: existingData.additionalData?.model || '',
+                            brakeMileage: existingData.additionalData?.mileage || '',
+                            maintenanceMileage: existingData.additionalData?.mileage || '',
+                            // Grocery fields empty
+                            item: '',
+                            groceryCategory: ''
+                        };
+                    }
+                }
                 
-                // Event fields
-                date: preselectedDate || '',
-                time: '',
-                hour: '',
-                minute: '00',
-                mainCategory: lastUsedCategories.event || 'home',
-                subcategory: '',
-                isRecurring: false,
-                recurrenceMonths: 12,
-                
-                // Event additional data
-                tyreBrand: '',
-                tyreModel: '',
-                tyreMileage: '',
-                brakeBrand: '',
-                brakeModel: '',
-                brakeMileage: '',
-                maintenanceMileage: '',
-                
-                // Grocery fields
-                item: '',
-                groceryCategory: lastUsedCategories.grocery || ''
+                // Default new item
+                return {
+                    // Task fields
+                    title: '',
+                    description: '',
+                    category: lastUsedCategories?.task || 'home',
+                    dueDate: '',
+                    priority: 'medium',
+                    // Event fields
+                    date: preselectedDate ? formatDateForDisplay(preselectedDate) : '',
+                    time: '',
+                    hour: '',
+                    minute: '00',
+                    mainCategory: lastUsedCategories?.event || 'home',
+                    subcategory: '',
+                    isRecurring: false,
+                    recurrenceMonths: 12,
+                    // Event additional data
+                    tyreBrand: '',
+                    tyreModel: '',
+                    tyreMileage: '',
+                    brakeBrand: '',
+                    brakeModel: '',
+                    brakeMileage: '',
+                    maintenanceMileage: '',
+                    // Grocery fields
+                    item: '',
+                    groceryCategory: lastUsedCategories?.grocery || ''
+                };
             });
             
             const [showSubcategory, setShowSubcategory] = useState(false);
@@ -2188,6 +2372,13 @@
                 brakePads: false,
                 vignette: false
             });
+            
+            // Initialize subcategory display if modifying
+            useEffect(() => {
+                if (isModifying && existingData?.type === 'event' && formData.subcategory) {
+                    handleMainCategoryChange(formData.mainCategory);
+                }
+            }, []);
             
             const handleMainCategoryChange = (category) => {
                 setFormData(prev => ({ ...prev, mainCategory: category, subcategory: '' }));
@@ -2228,48 +2419,50 @@
             const handleSubcategoryChange = (subcategory) => {
                 setFormData(prev => ({ ...prev, subcategory }));
                 
-                // Auto-generate title
-                const mainCategoryNames = {
-                    'gr-yaris': 'GR Yaris',
-                    'street-triple': 'Street Triple',
-                    'poubelles': 'Poubelles'
-                };
-                
-                const subcategoryNames = {
-                    'controle-technique': 'Contrôle Technique',
-                    'vignette': 'Vignette',
-                    'assurance': 'Assurance',
-                    'entretien': 'Entretien',
-                    'tyres': 'New Tyres',
-                    'brake-pads': 'New Brake Pads',
-                    'black': 'General Waste',
-                    'blue': 'Paper/Cardboard',
-                    'green': 'Glass',
-                    'blue-bag': 'PMC',
-                    'other': 'Other'
-                };
-                
-                if (subcategory && subcategory !== 'none') {
-                    const title = `${mainCategoryNames[formData.mainCategory]} - ${subcategoryNames[subcategory]}`;
-                    setFormData(prev => ({ ...prev, title }));
-                    
-                    // Show additional fields based on subcategory
-                    const newFieldsState = {
-                        maintenance: ['controle-technique', 'entretien'].includes(subcategory),
-                        tyres: subcategory === 'tyres',
-                        brakePads: subcategory === 'brake-pads',
-                        vignette: subcategory === 'vignette'
+                // Auto-generate title only if not modifying
+                if (!isModifying) {
+                    const mainCategoryNames = {
+                        'gr-yaris': 'GR Yaris',
+                        'street-triple': 'Street Triple',
+                        'poubelles': 'Poubelles'
                     };
-                    setShowAdditionalFields(newFieldsState);
                     
-                    // Set default recurrence
-                    const recurringCategories = ['controle-technique', 'vignette', 'assurance', 'entretien'];
-                    setFormData(prev => ({ 
-                        ...prev, 
-                        isRecurring: recurringCategories.includes(subcategory),
-                        recurrenceMonths: subcategory === 'vignette' ? 12 : 12
-                    }));
+                    const subcategoryNames = {
+                        'controle-technique': 'Contrôle Technique',
+                        'vignette': 'Vignette',
+                        'assurance': 'Assurance',
+                        'entretien': 'Entretien',
+                        'tyres': 'New Tyres',
+                        'brake-pads': 'New Brake Pads',
+                        'black': 'General Waste',
+                        'blue': 'Paper/Cardboard',
+                        'green': 'Glass',
+                        'blue-bag': 'PMC',
+                        'other': 'Other'
+                    };
+                    
+                    if (subcategory && subcategory !== 'none') {
+                        const title = `${mainCategoryNames[formData.mainCategory]} - ${subcategoryNames[subcategory]}`;
+                        setFormData(prev => ({ ...prev, title }));
+                    }
                 }
+                
+                // Show additional fields based on subcategory
+                const newFieldsState = {
+                    maintenance: ['controle-technique', 'entretien'].includes(subcategory),
+                    tyres: subcategory === 'tyres',
+                    brakePads: subcategory === 'brake-pads',
+                    vignette: subcategory === 'vignette'
+                };
+                setShowAdditionalFields(newFieldsState);
+                
+                // Set default recurrence
+                const recurringCategories = ['controle-technique', 'vignette', 'assurance', 'entretien'];
+                setFormData(prev => ({ 
+                    ...prev, 
+                    isRecurring: recurringCategories.includes(subcategory),
+                    recurrenceMonths: subcategory === 'vignette' ? 12 : 12
+                }));
             };
             
             const handleSubmit = (e) => {
@@ -2322,7 +2515,7 @@
                     });
                 }
                 
-                if (keepOpen) {
+                if (keepOpen && !isModifying) {
                     // Reset form but keep categories
                     setFormData(prev => ({
                         title: '',
@@ -2359,9 +2552,13 @@
             };
             
             const renderDatePicker = (value, onChange, placeholder = "DD/MM/YYYY") => {
+                const dateInputRef = useRef(null);
+                const hiddenInputRef = useRef(null);
+                
                 return (
                     <div className="date-input-wrapper">
                         <input
+                            ref={dateInputRef}
                             type="text"
                             value={value}
                             onChange={(e) => {
@@ -2375,13 +2572,15 @@
                             }}
                             onFocus={(e) => {
                                 // Show native date picker on focus
-                                const hiddenInput = e.target.nextSibling;
-                                if (hiddenInput) hiddenInput.showPicker();
+                                if (hiddenInputRef.current) {
+                                    hiddenInputRef.current.showPicker();
+                                }
                             }}
                             placeholder={placeholder}
                             pattern="\d{2}/\d{2}/\d{4}"
                         />
                         <input
+                            ref={hiddenInputRef}
                             type="date"
                             style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
                             onChange={(e) => {
@@ -2400,37 +2599,37 @@
                     <div className="modal" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
                             <h2 className="modal-title">
-                                {formType === 'task' && '📋 Add Task'}
-                                {formType === 'event' && '📅 Add Event'}
-                                {formType === 'grocery' && '🛒 Add Grocery Item'}
+                                {isModifying ? 'Modify' : 'Add'} {formType === 'task' ? '📋 Task' : formType === 'event' ? '📅 Event' : '🛒 Grocery Item'}
                             </h2>
                             <button className="modal-close" onClick={onClose}>×</button>
                         </div>
                         
                         <div className="modal-body">
-                            <div className="form-row-3" style={{ marginBottom: '20px' }}>
-                                <button 
-                                    type="button"
-                                    className={`btn btn-sm ${formType === 'task' ? '' : 'btn-secondary'}`}
-                                    onClick={() => setFormType('task')}
-                                >
-                                    Task
-                                </button>
-                                <button 
-                                    type="button"
-                                    className={`btn btn-sm ${formType === 'event' ? '' : 'btn-secondary'}`}
-                                    onClick={() => setFormType('event')}
-                                >
-                                    Event
-                                </button>
-                                <button 
-                                    type="button"
-                                    className={`btn btn-sm ${formType === 'grocery' ? '' : 'btn-secondary'}`}
-                                    onClick={() => setFormType('grocery')}
-                                >
-                                    Grocery
-                                </button>
-                            </div>
+                            {!isModifying && (
+                                <div className="form-row-3" style={{ marginBottom: '20px' }}>
+                                    <button 
+                                        type="button"
+                                        className={`btn btn-sm ${formType === 'task' ? '' : 'btn-secondary'}`}
+                                        onClick={() => setFormType('task')}
+                                    >
+                                        Task
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        className={`btn btn-sm ${formType === 'event' ? '' : 'btn-secondary'}`}
+                                        onClick={() => setFormType('event')}
+                                    >
+                                        Event
+                                    </button>
+                                    <button 
+                                        type="button"
+                                        className={`btn btn-sm ${formType === 'grocery' ? '' : 'btn-secondary'}`}
+                                        onClick={() => setFormType('grocery')}
+                                    >
+                                        Grocery
+                                    </button>
+                                </div>
+                            )}
                             
                             <form onSubmit={handleSubmit}>
                                 {formType === 'task' && (
@@ -2599,6 +2798,11 @@
                                             </div>
                                         )}
                                         
+                                        {/* Hide recurrence for birthdays but still set it */}
+                                        {formData.mainCategory === 'birthday' && (
+                                            <input type="hidden" value={formData.isRecurring = true} />
+                                        )}
+                                        
                                         {showAdditionalFields.vignette && (
                                             <div className="form-group">
                                                 <label>Recurrence Period</label>
@@ -2740,7 +2944,7 @@
                                         Cancel
                                     </button>
                                     <button type="submit" className="btn">
-                                        Add {keepOpen ? 'and Continue' : ''}
+                                        {isModifying ? 'Update' : `Add ${keepOpen && !isModifying ? 'and Continue' : ''}`}
                                     </button>
                                 </div>
                             </form>
