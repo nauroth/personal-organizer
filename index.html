@@ -2034,20 +2034,25 @@ const formatDateForDisplay = (dateString) => {
             const days = [];
             const dayHeaders = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // Start with Monday
             
-            // Previous month's trailing days
-            const prevMonth = new Date(year, month - 1, 0);
-            const prevMonthDays = prevMonth.getDate();
-            for (let i = adjustedStartDay - 1; i >= 0; i--) {
-                days.push({
-                    day: prevMonthDays - i,
-                    isOtherMonth: true,
-                    date: new Date(year, month - 1, prevMonthDays - i)
-                });
-            }
+    // Previous month's trailing days
+if (adjustedStartDay > 0) {
+    const prevMonthDate = new Date(year, month, 0); // This gives us the last day of previous month
+    const prevMonthDays = prevMonthDate.getDate();
+    
+    for (let i = adjustedStartDay - 1; i >= 0; i--) {
+        const dayNum = prevMonthDays - i;
+        days.push({
+            day: dayNum,
+            isOtherMonth: true,
+            date: new Date(year, month - 1, dayNum)
+        });
+    }
+}
             
             // Current month days
             const today = new Date();
-			const todayDateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+			// In the MonthView render, when creating dateStr for each day:
+const dateStr = `${dayInfo.date.getFullYear()}-${(dayInfo.date.getMonth() + 1).toString().padStart(2, '0')}-${dayInfo.date.getDate().toString().padStart(2, '0')}`;
             for (let day = 1; day <= daysInMonth; day++) {
                 const date = new Date(year, month, day);
                 days.push({
@@ -2074,8 +2079,8 @@ const formatDateForDisplay = (dateString) => {
                         <div key={header} className="calendar-day-header">{header}</div>
                     ))}
                     {days.map((dayInfo, index) => {
-                        const dateStr = `${dayInfo.date.getFullYear()}-${(dayInfo.date.getMonth() + 1).toString().padStart(2, '0')}-${dayInfo.date.getDate().toString().padStart(2, '0')}`;
-                        const dayEvents = events.filter(e => e.date === dateStr);
+// In the MonthView render, when creating dateStr for each day:
+const dateStr = `${dayInfo.date.getFullYear()}-${(dayInfo.date.getMonth() + 1).toString().padStart(2, '0')}-${dayInfo.date.getDate().toString().padStart(2, '0')}`;                        const dayEvents = events.filter(e => e.date === dateStr);
                         const dayTasks = tasks.filter(t => t.dueDate === dateStr);
                         
                         return (
